@@ -1,0 +1,34 @@
+{
+  "editor.formatOnSave": true,
+  "editor.detectIndentation": false,
+  "python.formatting.provider": "black",
+  "[python]": {
+    "editor.tabSize": 4
+  },
+  "python.linting.flake8Enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.enabled": true,
+  "workbench.colorCustomizations": {
+    "activityBar.activeBackground": "#ff0000",
+    "activityBar.activeBorder": "#ff7840",
+    "activityBar.background": "#ff0000",
+    "activityBar.foreground": "#e7e7e7",
+    "activityBar.inactiveForeground": "#e7e7e799",
+    "activityBarBadge.background": "#00df00",
+    "activityBarBadge.foreground": "#15202b",
+    "statusBar.background": "#cc0000",
+    "statusBar.foreground": "#e7e7e7",
+    "statusBarItem.hoverBackground": "#ff0000",
+    "sash.hoverBorder": "#ff0000",
+    "statusBarItem.remoteBackground": "#cc0000",
+    "statusBarItem.remoteForeground": "#e7e7e7",
+    "titleBar.activeBackground": "#cc0000",
+    "titleBar.activeForeground": "#e7e7e7",
+    "titleBar.inactiveBackground": "#cc000099",
+    "titleBar.inactiveForeground": "#e7e7e799",
+    "commandCenter.border": "#e7e7e799"
+},
+  "peacock.color": "#CBB4FF",
+  "peacock.remoteColor": "#cc0000",
+  "python.analysis.typeCheckingMode": "basic"
+}
