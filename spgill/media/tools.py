@@ -3,11 +3,15 @@ Module containing miscellaneous utility functions that don't belong anywhere els
 """
 
 ### stdlib imports
+import os
 import pathlib
 import re
+import sys
+import typing
 
 ### vendor imports
 import charset_normalizer
+import sh
 
 
 def guess_subtitle_charset(
@@ -71,3 +75,48 @@ def parse_display_fraction(value: str, ideal_denominator: int) -> int:
             return int((ideal_denominator / denominator) * numerator)
         return numerator
     return 0
+
+
+def _set_process_niceness(n: int):
+    os.nice(n)
+
+
+def run_command_politely(
+    command: sh.Command,
+    /,
+    arguments: list[typing.Any] = [],
+    cleanup_paths: list[pathlib.Path] = [],
+    niceness: int = 20,
+) -> None:
+    """
+    Run an sh Command class in a pseudo-foreground way (blocking with stdout and
+    stderr redirected to the OG process) with a preexec function to set the niceness
+    value of the child process.
+
+    Args:
+        command: Sh module Command to execute.
+        arguments: List of arguments to pass to the command when executed.
+        cleanup_paths: List of file paths to cleanup if the process is interrupted.
+        niceness: Level of niceness to apply to the child process.
+    """
+    # Start the command
+    running_command = command(
+        *arguments,
+        _preexec_fn=lambda: _set_process_niceness(niceness),
+        _bg=True,
+        _out=sys.stdout,
+        _err=sys.stderr,
+    )
+
+    # Wait for the process to finish and catch any keyboard interrupts
+    assert isinstance(running_command, sh.RunningCommand)
+    try:
+        running_command.wait()
+    except KeyboardInterrupt:
+        if running_command.is_alive():
+            running_command.kill()
+        if len(cleanup_paths) > 0:
+            for path in cleanup_paths:
+                if path.exists():
+                    path.unlink()
+        exit(0)

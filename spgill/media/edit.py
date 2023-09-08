@@ -15,7 +15,7 @@ import typing
 import sh
 
 ### local imports
-import spgill.utils.media.info as info
+from spgill.media import info, tools
 
 # Commands
 _mkvpropedit = sh.Command("mkvpropedit")
@@ -302,8 +302,9 @@ class EditJob:
         yield from self._generate_container_arguments()
         yield from self._generate_track_arguments()
 
-    def run(self, foreground: bool = True):
-        """Execute the edit operation."""
-        return _mkvpropedit(
-            *self._generate_command_arguments(), _fg=foreground
+    def run(self):
+        """Execute the edit operation. Blocks until the command process exits."""
+        tools.run_command_politely(
+            _mkvpropedit,
+            arguments=list(self._generate_command_arguments()),
         )

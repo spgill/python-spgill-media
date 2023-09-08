@@ -750,8 +750,15 @@ class MuxJob:
         yield "--track-order"
         yield ",".join(stream_order_pairs)
 
-    def run(self, fg=True):
-        """Run the mux job command."""
-        assert len(self._track_order) > 0  # quick sanity check
-        arguments = list(self._generate_command_arguments())
-        return _mkvmerge(*arguments, _fg=fg)
+    def run(self):
+        """Run the mux job command. Blocks until the command process exits."""
+        if len(self._track_order) == 0:
+            raise RuntimeError(
+                "You tried to execute a mux job with no tracks."
+            )
+
+        tools.run_command_politely(
+            _mkvmerge,
+            arguments=list(self._generate_command_arguments()),
+            cleanup_paths=[self.output],
+        )

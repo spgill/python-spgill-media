@@ -771,7 +771,11 @@ class Container(pydantic.BaseModel):
             extract_args.append(f"{track.index}:{path}")
 
         # Execute the extraction commands
-        _mkvextract(*extract_args, _fg=fg)
+        tools.run_command_politely(
+            _mkvextract,
+            arguments=extract_args,
+            cleanup_paths=[pair[1] for pair in track_pairs],
+        )
 
     def extract_chapters(
         self, path: pathlib.Path, simple: bool = False, fg: bool = True
@@ -784,7 +788,11 @@ class Container(pydantic.BaseModel):
         self._assert_is_matroska()
 
         # Call mkvextract to begin the extraction
-        _mkvextract(path, "chapters", "--simple" if simple else "", _fg=fg)
+        tools.run_command_politely(
+            _mkvextract,
+            arguments=[path, "chapters", "--simple" if simple else ""],
+            cleanup_paths=[path],
+        )
 
     def track_belongs_to_container(self, track: Track) -> bool:
         """Return `True` if the given track exists within this container."""
