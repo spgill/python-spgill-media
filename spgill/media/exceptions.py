@@ -41,3 +41,24 @@ class _ContainerException(Exception):
 class NotMatroskaContainer(_ContainerException):
     def __str__(self) -> str:
         return f"You tried to invoke a function that can only be used on Matroska containers: {self._container!r}"
+
+
+class _SelectorFragmentException(Exception):
+    # We can't use the actual container type because it would cause a circular import
+    def __init__(self, fragment: str) -> None:
+        self._fragment = fragment
+
+
+class SelectorFragmentParsingException(_SelectorFragmentException):
+    def __str__(self) -> str:
+        return f"Could not parse selector fragment '{self._fragment}'. Re-examine your selector syntax."
+
+
+class SelectorFragmentEvalException(_SelectorFragmentException):
+    def __str__(self) -> str:
+        return f"Exception encountered while evaluating expression '{self._fragment}'. Re-examine your syntax."
+
+
+class SelectorFragmentEvalBooleanException(_SelectorFragmentException):
+    def __str__(self) -> str:
+        return f"Return type of expression '{self._fragment}' was not boolean. Re-examine your syntax."

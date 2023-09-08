@@ -669,15 +669,11 @@ class Container(pydantic.BaseModel):
                 fragment_match = _selector_fragment_pattern.match(fragment)
 
                 if fragment_match is None:
-                    raise RuntimeError(
-                        f"Could not parse selector fragment '{fragment}'. Re-examine your selector syntax."
-                    )
+                    raise exceptions.SelectorFragmentParsingException(fragment)
 
                 polarity, expression = fragment_match.groups()
             except AttributeError:
-                raise RuntimeError(
-                    f"Could not parse selector fragment '{fragment}'. Re-examine your selector syntax."
-                )
+                raise exceptions.SelectorFragmentParsingException(fragment)
 
             filtered_tracks: list[Track] = []
 
@@ -693,14 +689,14 @@ class Container(pydantic.BaseModel):
                             expression, None, track.get_selector_values()
                         )
                     except Exception:
-                        raise RuntimeError(
-                            f"Exception encountered while evaluating selector expression '{expression}'. Re-examine your selector syntax."
+                        raise exceptions.SelectorFragmentEvalException(
+                            expression
                         )
 
                     # If the result isn't a boolean, raise an exception
                     if not isinstance(eval_result, bool):
-                        raise RuntimeError(
-                            f"Return type of selector expression '{expression}' was not boolean. Re-examine your selector syntax."
+                        raise exceptions.SelectorFragmentEvalBooleanException(
+                            expression
                         )
 
                     if eval_result:
