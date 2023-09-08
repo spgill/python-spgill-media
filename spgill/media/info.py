@@ -102,41 +102,43 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     # Convenience values
     track: "Track"
     index: int
-    typeIndex: int
+    type_index: int
     lang: str
     name: str
     codec: str
 
     # Convenience flags
-    isVideo: bool
-    isAudio: bool
-    isSubtitle: bool
-    isEnglish: bool
+    is_video: bool
+    is_audio: bool
+    is_subtitle: bool
+    is_english: bool
 
     # Boolean disposition/flags
-    isDefault: bool
-    isForced: bool
-    isHI: bool
-    isCommentary: bool
+    is_default: bool
+    is_forced: bool
+    is_hi: bool
+    is_commentary: bool
 
     # Video track flags
-    isHEVC: bool
-    isAVC: bool
-    isHDR: bool
-    isDoVi: bool
-    isHDR10Plus: bool
+    is_hevc: bool
+    is_avc: bool
+    is_hdr: bool
+    is_hdr10: bool
+    is_hlg: bool
+    is_dovi: bool
+    is_hdr10plus: bool
 
     # Audio track flags
-    isAAC: bool
-    isAC3: bool
-    isEAC3: bool
-    isDTS: bool
-    isDTSHD: bool
-    isTrueHD: bool
+    is_aac: bool
+    is_ac3: bool
+    is_eac3: bool
+    is_dts: bool
+    is_dtshd: bool
+    is_truehd: bool
 
     # Subtitle track flags
-    isText: bool
-    isImage: bool
+    is_text: bool
+    is_image: bool
 
 
 class TrackTags(pydantic.BaseModel):
@@ -407,37 +409,39 @@ class Track(pydantic.BaseModel):
             # Convenience values
             "track": self,
             "index": self.index,
-            "typeIndex": self.type_index,
+            "type_index": self.type_index,
             "lang": self.language or "",
             "name": self.name or "",
             "codec": self.codec_name or "",
             # Convenience flags
-            "isVideo": self.type is TrackType.Video,
-            "isAudio": self.type is TrackType.Audio,
-            "isSubtitle": self.type is TrackType.Subtitle,
-            "isEnglish": (self.language or "").lower() in ["en", "eng"],
+            "is_video": self.type is TrackType.Video,
+            "is_audio": self.type is TrackType.Audio,
+            "is_subtitle": self.type is TrackType.Subtitle,
+            "is_english": (self.language or "").lower() in ["en", "eng"],
             # Boolean disposition flags
-            "isDefault": self.flags.default,
-            "isForced": self.flags.forced,
-            "isHI": self.flags.hearing_impaired,
-            "isCommentary": self.flags.commentary,
+            "is_default": self.flags.default,
+            "is_forced": self.flags.forced,
+            "is_hi": self.flags.hearing_impaired,
+            "is_commentary": self.flags.commentary,
             # Video track flags
-            "isHEVC": "hevc" in (self.codec_name or "").lower(),
-            "isAVC": "avc" in (self.codec_name or "").lower(),
-            "isHDR": self.is_hdr,
-            "isDoVi": HDRFormat.DolbyVision in (self.hdr_formats or set()),
-            "isHDR10Plus": HDRFormat.HDR10Plus in (self.hdr_formats or set()),
+            "is_hevc": "hevc" in (self.codec_name or "").lower(),
+            "is_avc": "avc" in (self.codec_name or "").lower(),
+            "is_hdr": self.is_hdr,
+            "is_hdr10": HDRFormat.HDR10 in self.hdr_formats,
+            "is_hlg": HDRFormat.HLG in self.hdr_formats,
+            "is_dovi": HDRFormat.DolbyVision in self.hdr_formats,
+            "is_hdr10plus": HDRFormat.HDR10Plus in self.hdr_formats,
             # Audio track flags
-            "isAAC": "aac" in (self.codec_name or "").lower(),
-            "isAC3": "_ac3" in (self.codec_name or "").lower(),
-            "isEAC3": "eac3" in (self.codec_name or "").lower(),
-            "isDTS": "dts" in (self.codec_name or "").lower(),
-            "isDTSHD": "dts" in (self.codec_name or "").lower()
+            "is_aac": "aac" in (self.codec_name or "").lower(),
+            "is_ac3": "_ac3" in (self.codec_name or "").lower(),
+            "is_eac3": "eac3" in (self.codec_name or "").lower(),
+            "is_dts": "dts" in (self.codec_name or "").lower(),
+            "is_dtshd": "dts" in (self.codec_name or "").lower()
             and "hd" in (self.profile or "").lower(),
-            "isTrueHD": "truehd" in (self.codec_name or "").lower(),
+            "is_truehd": "truehd" in (self.codec_name or "").lower(),
             # Subtitle track flags
-            "isImage": self.codec_name in _subtitle_image_codecs,
-            "isText": self.codec_name not in _subtitle_image_codecs,
+            "is_image": self.codec_name in _subtitle_image_codecs,
+            "is_text": self.codec_name not in _subtitle_image_codecs,
         }
 
     def extract(self, path: pathlib.Path, fg: bool = True):
