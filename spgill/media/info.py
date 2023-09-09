@@ -219,9 +219,7 @@ class Track(pydantic.BaseModel):
 
     def __hash__(self) -> int:
         assert self.container
-        return hash(
-            f"{self.container.format.filename.absolute()}/{self.index}"
-        )
+        return hash((self.container.format.filename, self.index))
 
     # Properties
     @property
@@ -511,7 +509,7 @@ class Container(pydantic.BaseModel):
     """List of frame data captured from `ffprobe`. Only useful for identifying frame side data."""
 
     def __hash__(self) -> int:
-        return hash(self.format.filename.absolute())
+        return hash((self.format.filename.absolute()))
 
     @property
     def tracks_by_type(self) -> dict[TrackType, list[Track]]:
