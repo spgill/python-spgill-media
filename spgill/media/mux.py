@@ -230,7 +230,7 @@ class MuxJob:
         self, options: OutputContainerOptionDict
     ) -> None:
         """Set the output options, replacing any previously stored values."""
-        self._output_container_options = options
+        self._output_container_options = options.copy()
 
     def update_output_container_options(
         self, options: OutputContainerOptionDict
@@ -240,7 +240,7 @@ class MuxJob:
 
     def get_output_container_options(self) -> OutputContainerOptionDict:
         """Return the stored output options."""
-        return self._output_container_options
+        return self._output_container_options.copy()
 
     def _is_source_container_referenced(
         self, container: info.Container
@@ -254,7 +254,7 @@ class MuxJob:
         self, container: info.Container, options: SourceContainerOptionDict
     ) -> None:
         """Set options for the specified container, replacing any previously stored values."""
-        self._source_container_options[container] = options
+        self._source_container_options[container] = options.copy()
 
     def update_source_container_options(
         self, container: info.Container, options: SourceContainerOptionDict
@@ -269,7 +269,7 @@ class MuxJob:
         self, container: info.Container
     ) -> SourceContainerOptionDict:
         """Return the stored options for the specified container."""
-        return self._source_container_options.get(container, {})
+        return self._source_container_options.get(container, {}).copy()
 
     def delete_source_container_options(
         self, container: info.Container
@@ -284,7 +284,7 @@ class MuxJob:
         options: TrackOptionDict,
     ) -> None:
         """Set options for the specified track, replacing any previously stored values."""
-        self._track_options[track] = options
+        self._track_options[track] = options.copy()
 
     def update_track_options(
         self,
@@ -299,7 +299,7 @@ class MuxJob:
 
     def get_track_options(self, track: info.Track) -> TrackOptionDict:
         """Return the stored options for the specified track."""
-        return self._track_options.get(track, {})
+        return self._track_options.get(track, {}).copy()
 
     def delete_track_options(self, track: info.Track) -> None:
         """Delete any stored options for the specified track."""
