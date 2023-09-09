@@ -9,6 +9,7 @@ parameters of tracks.
 ### stdlib imports
 import enum
 import pathlib
+import tempfile
 import typing
 
 ### vendor imports
@@ -117,6 +118,7 @@ class EditJob:
     _chapter_action: typing.Optional[
         tuple[_PropertyAction, typing.Optional[pathlib.Path]]
     ]
+    _chapter_tempfile: typing.Optional[tempfile._TemporaryFileWrapper]
     _container_title_action: typing.Optional[
         tuple[_PropertyAction, typing.Union[str, None]]
     ]
@@ -140,6 +142,7 @@ class EditJob:
         # Initialize instance vars
         self._tag_actions = []
         self._chapter_action = None
+        self._chapter_tempfile = None
         self._container_title_action = None
         self._track_actions = {}
 
@@ -158,9 +161,16 @@ class EditJob:
         """Delete tags; globally, for all tracks, or just a single track."""
         self._tag_actions.append((_PropertyAction.Delete, selector, None))
 
-    def set_chapters(self, path: pathlib.Path):
+    def set_chapters(self, path: pathlib.Path) -> None:
         """Set the container's chapters from a file. Mutually exclusive with `EditJob.remove_chapters()`."""
         self._chapter_action = (_PropertyAction.Set, path)
+
+    def set_chapters_from_string(self, chapters: str) -> None:
+        """Set the container's chapters from a string instead of a file."""
+        self._chapter_tempfile = tempfile.NamedTemporaryFile(mode="wb")
+        self._chapter_tempfile.write(chapters.encode("UTF-8"))
+        self._chapter_tempfile.flush()
+        self.set_chapters(pathlib.Path(self._chapter_tempfile.name))
 
     def delete_chapters(self):
         """Remove all chapters from the container. Mutually exclusive with `EditJob.set_chapters()`."""

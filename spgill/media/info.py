@@ -780,21 +780,47 @@ class Container(pydantic.BaseModel):
         )
 
     def extract_chapters(
-        self, path: pathlib.Path, simple: bool = False, fg: bool = True
-    ):
+        self, path: pathlib.Path, simple: bool = True
+    ) -> None:
         """
         Extract all chapters in this container to a file.
 
-        *ONLY WORTH WITH MKV CONTAINERS*
+        *ONLY WORKS WITH MKV CONTAINERS*
         """
         self._assert_is_matroska()
 
         # Call mkvextract to begin the extraction
         tools.run_command_politely(
             _mkvextract,
-            arguments=[path, "chapters", "--simple" if simple else ""],
+            arguments=[
+                self.format.filename,
+                "chapters",
+                "--redirect-output",
+                path,
+                "--simple" if simple else "",
+            ],
             cleanup_paths=[path],
         )
+
+    def extract_chapters_to_string(self, simple: bool = True) -> str:
+        """
+        Extract all chapters in this container to a string.
+
+        *ONLY WORKS WITH MKV CONTAINERS*
+        """
+        self._assert_is_matroska()
+
+        # Call mkvextract to begin the extraction
+        result = _mkvextract(
+            self.format.filename,
+            "chapters",
+            "--output-charset",
+            "UTF-8",
+            "--simple" if simple else "",
+            _encoding="UTF-8",
+        )
+        assert isinstance(result, str)
+        return result
 
     def track_belongs_to_container(self, track: Track) -> bool:
         """Return `True` if the given track exists within this container."""
