@@ -837,6 +837,20 @@ class Container(pydantic.BaseModel):
                         yield side_data
 
 
+_cli_app = typer.Typer()
+
+
+@_cli_app.command(
+    "probe",
+    help="Probe a single media file using the same ffprobe command used internally"
+    " by `spgill.media.info.Container.open()` and print the results.",
+)
+def _cli_probe(
+    path: pathlib.Path = typer.Argument(..., help="Path to the media file.")
+):
+    print(Container._probe(path))
+
+
 _default_cli_extensions: list[str] = [".mkv", ".mp4", ".m4v", ".wmv", ".avi"]
 
 _affirmative = "[green]✓[/green]"
@@ -844,7 +858,12 @@ _negative = "[red]✗[/red]"
 _em_dash = "—"
 
 
-def _main(
+@_cli_app.command(
+    "tracks",
+    help="Probe one or many media files and print a list of tabular readout of their"
+    " various properties.",
+)
+def _cli_tracks(
     sources: list[pathlib.Path] = typer.Argument(
         ..., help="List of files and/or directories to probe."
     ),
@@ -867,11 +886,6 @@ def _main(
         help="Selector for deciding which tracks to show from each container. Defaults to all tracks.",
     ),
 ):
-    """
-    CLI interface for probing media containers and printing info about the container
-    and their tracks.
-    """
-
     console = rich.console.Console()
 
     # Construct a full list of media container paths to scan
@@ -886,7 +900,7 @@ def _main(
                         path_list.append(path)
         else:
             for path in sorted(source.iterdir()):
-                if path.suffix.lower() == ".mkv":
+                if path.suffix.lower() in extensions:
                     path_list.append(path)
 
     # If no file were found in the sweep, abort
@@ -978,4 +992,4 @@ def _main(
 
 
 if __name__ == "__main__":
-    typer.run(_main)
+    _cli_app()
