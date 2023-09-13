@@ -89,10 +89,14 @@ def _generate_property_arguments(
     property_value: typing.Optional[typing.Union[bool, str, int]],
 ) -> typing.Generator[str, None, None]:
     """Generate arguments for an action on a track property."""
+    formatted_value: str = str(property_value)
+    if isinstance(property_value, bool):
+        formatted_value = str(int(property_value))
+
     if action is _PropertyAction.Add:
-        yield from ["--add", f"{property_name}={property_value}"]
+        yield from ["--add", f"{property_name}={formatted_value}"]
     elif action is _PropertyAction.Set:
-        yield from ["--set", f"{property_name}={property_value}"]
+        yield from ["--set", f"{property_name}={formatted_value}"]
     elif action is _PropertyAction.Delete:
         yield from ["--delete", property_name]
 
