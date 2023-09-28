@@ -491,18 +491,19 @@ class MuxJob:
                     is_compatibility = "compatibility" in name
 
                     # If any of these conditions are true, then the track should
-                    # not be a default track, under normal circumstances
+                    # not be a default track, under normal circumstances.
                     if is_forced or is_hi or is_commentary or is_compatibility:
                         new_options[TrackOption.Default] = False
 
-                    # HI or compatibility tracks, in an ideal scenario,  will never
+                    # HI or compatibility tracks, in an ideal scenario, will never
                     # be default. But they will remain an alternate should no other
-                    # acceptable candidates be found
+                    # acceptable candidates be found.
                     if (is_hi or is_compatibility) and not alternate:
                         alternate = track
 
-                    # Else, this track is a candidate for default track
-                    else:
+                    # Else, as long as this track isn't forced or commentary, it
+                    # is a candidate for default track.
+                    elif not is_forced and not is_commentary:
                         new_options[TrackOption.Default] = not default_found
                         default_found = True
 
