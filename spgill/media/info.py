@@ -846,7 +846,9 @@ _cli_app = typer.Typer()
     " by `spgill.media.info.Container.open()` and print the results.",
 )
 def _cli_probe(
-    path: pathlib.Path = typer.Argument(..., help="Path to the media file.")
+    path: typing.Annotated[
+        pathlib.Path, typer.Argument(help="Path to the media file.")
+    ]
 ):
     print(Container._probe(path))
 
@@ -864,27 +866,34 @@ _em_dash = "—"
     " various properties.",
 )
 def _cli_tracks(
-    sources: list[pathlib.Path] = typer.Argument(
-        ..., help="List of files and/or directories to probe."
-    ),
-    recurse: bool = typer.Option(
-        False,
-        "--recurse",
-        "-r",
-        help="Recurse directory sources to look for media files. By default only files contained directly in the directory are probed.",
-    ),
-    extensions: list[str] = typer.Option(
-        _default_cli_extensions,
-        "--extension",
-        "-x",
-        help="Specify file extensions to consider when searching directories.",
-    ),
-    selector: str = typer.Option(
-        "all",
-        "--selector",
-        "-s",
-        help="Selector for deciding which tracks to show from each container. Defaults to all tracks.",
-    ),
+    sources: typing.Annotated[
+        list[pathlib.Path],
+        typer.Argument(help="List of files and/or directories to probe."),
+    ],
+    recurse: typing.Annotated[
+        bool,
+        typer.Option(
+            "--recurse",
+            "-r",
+            help="Recurse directory sources to look for media files. By default only files contained directly in the directory are probed.",
+        ),
+    ] = False,
+    extensions: typing.Annotated[
+        list[str],
+        typer.Option(
+            "--extension",
+            "-x",
+            help="Specify file extensions to consider when searching directories.",
+        ),
+    ] = _default_cli_extensions,
+    selector: typing.Annotated[
+        str,
+        typer.Option(
+            "--selector",
+            "-s",
+            help="Selector for deciding which tracks to show from each container. Defaults to all tracks.",
+        ),
+    ] = "all",
 ):
     console = rich.console.Console()
 
