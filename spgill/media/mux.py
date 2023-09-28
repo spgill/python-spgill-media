@@ -43,8 +43,9 @@ class _BooleanOptionFormatter(_BaseOptionFormatter):
         self, value: OptionValueType, track: typing.Optional[info.Track]
     ) -> list[str]:
         assert isinstance(value, bool)
-        assert track is not None
-        return [self.option, f"{track.index}:{int(value)}"]
+        if track is not None:
+            return [self.option, f"{track.index}:{int(value)}"]
+        return [self.option, str(int(value))]
 
 
 class _StringOptionFormatter(_BaseOptionFormatter):
@@ -52,8 +53,9 @@ class _StringOptionFormatter(_BaseOptionFormatter):
         self, value: OptionValueType, track: typing.Optional[info.Track]
     ) -> list[str]:
         assert isinstance(value, (str, pathlib.Path))
-        assert track is not None
-        return [self.option, f"{track.index}:{value}"]
+        if track is not None:
+            return [self.option, f"{track.index}:{value}"]
+        return [self.option, str(value)]
 
 
 class OutputContainerOption(enum.Enum):
