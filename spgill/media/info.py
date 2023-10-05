@@ -934,6 +934,7 @@ def _cli_tracks(
     table.add_column("Forced")
     table.add_column("HI")
     table.add_column("Commentary")
+    table.add_column("Original")
     table.add_column("Title")
 
     # Iterate through each media file and list the audio tracks
@@ -993,6 +994,7 @@ def _cli_tracks(
                 _affirmative if track.flags.forced else _negative,
                 _affirmative if track.flags.hearing_impaired else _negative,
                 _affirmative if track.flags.commentary else _negative,
+                _affirmative if track.flags.original_language else _negative,
                 track.name or "",
                 end_section=(j == len(track_list) - 1),
             )
