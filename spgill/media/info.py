@@ -284,7 +284,7 @@ class Track(pydantic.BaseModel):
             formats.add(HDRFormat.HLG)
 
         # Dolby vision and HDR10+ can be detected via the frame side data
-        if len(
+        if bool(
             list(
                 self.container.get_frame_side_data(
                     self.index, SideDataType.DolbyVisionRPU
@@ -293,7 +293,7 @@ class Track(pydantic.BaseModel):
         ):
             formats.add(HDRFormat.DolbyVision)
 
-        if len(
+        if bool(
             list(
                 self.container.get_frame_side_data(
                     self.index, SideDataType.HDRDynamicMeta
@@ -301,6 +301,12 @@ class Track(pydantic.BaseModel):
             )
         ):
             formats.add(HDRFormat.HDR10Plus)
+
+        # Alternate method for detecting DoVi config in the track's side data
+        if bool(
+            list(self.get_track_side_data(SideDataType.DolbyVisionConfig))
+        ):
+            formats.add(HDRFormat.DolbyVision)
 
         return formats
 
@@ -452,6 +458,14 @@ class Track(pydantic.BaseModel):
             raise exceptions.TrackNoParentContainer(self)
 
         self.container.extract_tracks([(self, path)], fg)
+
+    def get_track_side_data(
+        self, data_type: SideDataType
+    ) -> typing.Generator[dict[str, typing.Any], None, None]:
+        """For this track, yield all side data entries that match the given type."""
+        for side_data in self.side_data_list:
+            if side_data.get("side_data_type", "") == data_type.value:
+                yield side_data
 
 
 class Chapter(pydantic.BaseModel):
