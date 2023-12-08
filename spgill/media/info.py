@@ -96,6 +96,12 @@ class HDRFormat(enum.Enum):
     HLG = "hlg"
 
 
+class DolbyVisionLayer(enum.Enum):
+    BaseLayer = "BL"
+    EnhancementLayer = "EL"
+    RPU = "RPU"
+
+
 class TrackSelectorValues(typing.TypedDict, total=True):
     """Selector flags used for simple selection of tracks from a container (specifically from the CLI)."""
 
@@ -394,6 +400,50 @@ class Track(pydantic.BaseModel):
         max_content_light = light_level_data.get("max_content", 0)
         max_average_light = light_level_data.get("max_average", 0)
         return f"{max_content_light},{max_average_light}"
+
+    @property
+    def dovi_configuration(self) -> dict[str, typing.Any]:
+        """
+        Return the Dolby Vision configuration for the track, or an empty dict if
+        none exists (or non-video track).
+        """
+        found = list(self.get_track_side_data(SideDataType.DolbyVisionConfig))
+        return found[0] if found else {}
+
+    @property
+    def dovi_profile(self) -> typing.Optional[int]:
+        """Return the Dolby Vision profile of the track."""
+        return self.dovi_configuration.get("dv_profile", None)
+
+    @property
+    def dovi_level(self) -> typing.Optional[int]:
+        """Return the Dolby Vision level of the track."""
+        return self.dovi_configuration.get("dv_level", None)
+
+    @property
+    def dovi_compatibility_id(self) -> typing.Optional[int]:
+        """
+        Return the Dolby Vision signal compatibility ID of the track.
+
+        More information on these compatibility IDs can be found in the
+        following Dolby documentation (approx. Page 10):
+        https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile
+        """
+        return self.dovi_configuration.get(
+            "dv_bl_signal_compatibility_id", None
+        )
+
+    @property
+    def dovi_layers(self) -> set[DolbyVisionLayer]:
+        layers: set[DolbyVisionLayer] = set()
+        config = self.dovi_configuration
+        if config.get("bl_present_flag", 0):
+            layers.add(DolbyVisionLayer.BaseLayer)
+        if config.get("el_present_flag", 0):
+            layers.add(DolbyVisionLayer.EnhancementLayer)
+        if config.get("rpu_present_flag", 0):
+            layers.add(DolbyVisionLayer.RPU)
+        return layers
 
     def __repr__(self) -> str:
         attributes = ["index", "type", "codec_name", "name", "language"]
@@ -908,6 +958,14 @@ def _cli_tracks(
             help="Selector for deciding which tracks to show from each container. Defaults to all tracks.",
         ),
     ] = "all",
+    dovi_info: typing.Annotated[
+        bool,
+        typer.Option(
+            "--dovi",
+            "-d",
+            help="Display an extra column containing Dolby Vision profile, level, and layers",
+        ),
+    ] = False,
 ):
     console = rich.console.Console()
 
@@ -942,6 +1000,10 @@ def _cli_tracks(
     table.add_column("Bitrate", justify="right")
     table.add_column("Resolution")
     table.add_column("HDR")
+
+    if dovi_info:
+        table.add_column("DoVi")
+
     table.add_column("Channels")
     table.add_column("Language")
     table.add_column("Default")
@@ -980,10 +1042,22 @@ def _cli_tracks(
                         pass
 
             hdr = ""
+            dovi_col = ""
             if track.type == TrackType.Video:
                 hdr = ",".join([f.name for f in (track.hdr_formats or set())])
 
-            table.add_row(
+                if dovi_info and HDRFormat.DolbyVision in track.hdr_formats:
+                    layers: list[str] = []
+                    if DolbyVisionLayer.BaseLayer in track.dovi_layers:
+                        layers.append(DolbyVisionLayer.BaseLayer.value)
+                    if DolbyVisionLayer.EnhancementLayer in track.dovi_layers:
+                        layers.append(DolbyVisionLayer.EnhancementLayer.value)
+                    if DolbyVisionLayer.RPU in track.dovi_layers:
+                        layers.append(DolbyVisionLayer.RPU.value)
+
+                    dovi_col = f"{track.dovi_profile}.{track.dovi_level} {'+'.join(layers)}"
+
+            columns: list[typing.Union[str, None]] = [
                 str(path),
                 str(track.index),
                 str(track.type.name if track.type else ""),
@@ -1002,6 +1076,7 @@ def _cli_tracks(
                 ),
                 resolution,
                 hdr,
+                dovi_col if dovi_info else None,
                 str(track.channels or ""),
                 str(track.language or "und"),
                 _affirmative if track.flags.default else _negative,
@@ -1010,6 +1085,10 @@ def _cli_tracks(
                 _affirmative if track.flags.commentary else _negative,
                 _affirmative if track.flags.original_language else _negative,
                 track.name or "",
+            ]
+
+            table.add_row(
+                *[c for c in columns if c is not None],
                 end_section=(j == len(track_list) - 1),
             )
 
