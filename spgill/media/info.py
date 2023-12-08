@@ -20,7 +20,7 @@ import rich.prompt
 import rich.text
 import rich.table
 import sh
-from spgill.utils.walk import walk
+from spgill.utils.walk import find_files_by_suffix
 import typer
 
 # local imports
@@ -929,7 +929,7 @@ _em_dash = "—"
     help="Probe one or many media files and print a list of tabular readout of their"
     " various properties.",
 )
-def _cli_tracks(
+def _cli_tracks(  # noqa: C901
     sources: typing.Annotated[
         list[pathlib.Path],
         typer.Argument(help="List of files and/or directories to probe."),
@@ -970,19 +970,11 @@ def _cli_tracks(
     console = rich.console.Console()
 
     # Construct a full list of media container paths to scan
-    path_list: list[pathlib.Path] = []
-    for source in sources:
-        if source.is_file():
-            path_list.append(source)
-        elif recurse:
-            for *_, paths in walk(source, sort=True):
-                for path in paths:
-                    if path.suffix.lower() in extensions:
-                        path_list.append(path)
-        else:
-            for path in sorted(source.iterdir()):
-                if path.suffix.lower() in extensions:
-                    path_list.append(path)
+    path_list = list(
+        find_files_by_suffix(
+            sources, suffixes=extensions, recurse=recurse, sort=True
+        )
+    )
 
     # If no file were found in the sweep, abort
     if not len(path_list):
