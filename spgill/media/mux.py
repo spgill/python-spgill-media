@@ -647,6 +647,34 @@ class MuxJob:
         if assign_sensible_names:
             self._assign_sensible_names()
 
+    def auto_order_tracks(self):
+        """
+        Re-order all of the tracks in the mux job to be grouped by type. Video
+        tracks, followed by audio tracks, and finally followed by the subtitle
+        tracks.
+        """
+        # Start by collating all the current tracks by their type
+        tracks_by_type: dict[info.TrackType, list[info.Track]] = {
+            info.TrackType.Video: [
+                t for t in self._track_order if t.type is info.TrackType.Video
+            ],
+            info.TrackType.Audio: [
+                t for t in self._track_order if t.type is info.TrackType.Audio
+            ],
+            info.TrackType.Subtitle: [
+                t
+                for t in self._track_order
+                if t.type is info.TrackType.Subtitle
+            ],
+        }
+
+        # Now we store this back in the track order attribute
+        self._track_order = [
+            *tracks_by_type[info.TrackType.Video],
+            *tracks_by_type[info.TrackType.Audio],
+            *tracks_by_type[info.TrackType.Subtitle],
+        ]
+
     def _format_option(
         self,
         option_type: _AnyOption,
