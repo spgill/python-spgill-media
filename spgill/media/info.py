@@ -73,6 +73,9 @@ class TrackFlags(pydantic.BaseModel):
     commentary: bool = pydantic.Field(alias="comment")
     """This track contains commentary."""
 
+    attached_pic: bool
+    """This field is used by ffprobe to indicated an image attachment."""
+
 
 class SideDataType(enum.Enum):
     """Known values of track `side_data_type`. Mostly to identify HDR and HDR-related data."""
@@ -624,6 +627,13 @@ class Container(pydantic.BaseModel):
         # Bind all the tracks back to this container
         for track in instance.tracks:
             track._bind(instance)
+
+        # Because attached images are identified by ffprobe as video tracks with
+        # a special flag, we will quickly iterate through and adjust these to
+        # appear as attachment tracks.
+        for track in instance.tracks:
+            if track.flags.attached_pic:
+                track.type = TrackType.Attachment
 
         return instance
 
