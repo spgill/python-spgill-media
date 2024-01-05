@@ -575,12 +575,17 @@ class Container(pydantic.BaseModel):
     frames: list[ContainerFrameData]
     """List of frame data captured from `ffprobe`. Only useful for identifying frame side data."""
 
+    attachments: list[Track] = pydantic.Field(default_factory=list)
+    """List of container attachment files."""
+
     def __hash__(self) -> int:
         return hash((self.format.filename.absolute()))
 
-    @property
-    def tracks_by_type(self) -> dict[TrackType, list[Track]]:
-        """Property with a dictionary that groups tracks by their type."""
+    @classmethod
+    def sort_tracks_by_type(
+        cls, tracks: list[Track]
+    ) -> dict[TrackType, list[Track]]:
+        """Given a list of tracks, return them sorted by their type attribute."""
         groups: dict[TrackType, list[Track]] = {
             TrackType.Video: [],
             TrackType.Audio: [],
@@ -588,10 +593,49 @@ class Container(pydantic.BaseModel):
             TrackType.Attachment: [],
         }
 
-        for track in self.tracks:
+        for track in tracks:
             groups[track.type].append(track)
 
         return groups
+
+    @classmethod
+    def sort_tracks_by_language(
+        cls, tracks: list[Track]
+    ) -> dict[str, list[Track]]:
+        """Given a list of tracks, return them sorted by their language."""
+        groups: dict[str, list[Track]] = {}
+
+        for track in tracks:
+            language = track.language or "und"
+            if language not in groups:
+                groups[language] = []
+            groups[language].append(track)
+
+        return groups
+
+    @property
+    def tracks_by_type(self) -> dict[TrackType, list[Track]]:
+        """Container's tracks grouped by their type."""
+        return self.sort_tracks_by_type(self.tracks)
+
+    @property
+    def tracks_by_language(self) -> dict[str, list[Track]]:
+        """Container's tracks grouped by their language."""
+        return self.sort_tracks_by_language(self.tracks)
+
+    @property
+    def tracks_by_type_by_language(
+        self,
+    ) -> dict[str, dict[TrackType, list[Track]]]:
+        """Container's tracks grouped first by language, then by type."""
+        language_groups: dict[str, dict[TrackType, list[Track]]] = {}
+
+        for language, tracks in self.sort_tracks_by_language(
+            self.tracks
+        ).items():
+            language_groups[language] = self.sort_tracks_by_type(tracks)
+
+        return language_groups
 
     @classmethod
     def _probe(cls, path: pathlib.Path) -> str:
@@ -628,12 +672,14 @@ class Container(pydantic.BaseModel):
         for track in instance.tracks:
             track._bind(instance)
 
-        # Because attached images are identified by ffprobe as video tracks with
-        # a special flag, we will quickly iterate through and adjust these to
-        # appear as attachment tracks.
+        # Because ffprobe co-mingles attachments with tracks, we have to tease
+        # them apart manually and then add them to the attachment list.
+        instance.attachments = []
         for track in instance.tracks:
-            if track.flags.attached_pic:
+            if track.type is TrackType.Attachment or track.flags.attached_pic:
                 track.type = TrackType.Attachment
+                instance.attachments.append(track)
+                instance.tracks.remove(track)
 
         return instance
 
