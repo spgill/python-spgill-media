@@ -87,6 +87,7 @@ def run_command_politely(
     arguments: list[typing.Any] = [],
     cleanup_paths: list[pathlib.Path] = [],
     niceness: int = 20,
+    warnings_are_fatal: bool = False,
 ) -> None:
     """
     Run an sh Command class in a pseudo-foreground way (blocking with stdout and
@@ -106,6 +107,7 @@ def run_command_politely(
         _bg=True,
         _out=sys.stdout,
         _err=sys.stderr,
+        _ok_code=[0] if warnings_are_fatal else [0, 1],
     )
 
     # Wait for the process to finish and catch any keyboard interrupts

@@ -870,7 +870,11 @@ class Container(pydantic.BaseModel):
             raise exceptions.NotMatroskaContainer(self)
 
     def extract_tracks(
-        self, track_pairs: list[tuple[Track, pathlib.Path]], fg: bool = True
+        self,
+        track_pairs: list[tuple[Track, pathlib.Path]],
+        fg: bool = True,
+        /,
+        warnings_are_fatal=False,
     ):
         """
         Extract one or more tracks from this container.
@@ -897,10 +901,15 @@ class Container(pydantic.BaseModel):
             _mkvextract,
             arguments=extract_args,
             cleanup_paths=[pair[1] for pair in track_pairs],
+            warnings_are_fatal=warnings_are_fatal,
         )
 
     def extract_chapters(
-        self, path: pathlib.Path, simple: bool = True
+        self,
+        path: pathlib.Path,
+        simple: bool = True,
+        /,
+        warnings_are_fatal=False,
     ) -> None:
         """
         Extract all chapters in this container to a file.
@@ -920,6 +929,7 @@ class Container(pydantic.BaseModel):
                 "--simple" if simple else "",
             ],
             cleanup_paths=[path],
+            warnings_are_fatal=warnings_are_fatal,
         )
 
     def extract_chapters_to_string(self, simple: bool = True) -> str:

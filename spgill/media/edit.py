@@ -316,9 +316,10 @@ class EditJob:
         yield from self._generate_container_arguments()
         yield from self._generate_track_arguments()
 
-    def run(self):
+    def run(self, /, warnings_are_fatal=False):
         """Execute the edit operation. Blocks until the command process exits."""
         tools.run_command_politely(
             _mkvpropedit,
             arguments=list(self._generate_command_arguments()),
+            warnings_are_fatal=warnings_are_fatal,
         )

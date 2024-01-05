@@ -781,7 +781,7 @@ class MuxJob:
         yield "--track-order"
         yield ",".join(stream_order_pairs)
 
-    def run(self):
+    def run(self, /, warnings_are_fatal=False):
         """Run the mux job command. Blocks until the command process exits."""
         if len(self._track_order) == 0:
             raise RuntimeError(
@@ -792,4 +792,5 @@ class MuxJob:
             _mkvmerge,
             arguments=list(self._generate_command_arguments()),
             cleanup_paths=[self.output],
+            warnings_are_fatal=warnings_are_fatal,
         )
