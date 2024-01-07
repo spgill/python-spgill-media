@@ -1054,7 +1054,6 @@ def _cli_tracks(  # noqa: C901
     table.add_column("Type")
     table.add_column("Order")
     table.add_column("Codec")
-    table.add_column("Mode")
     table.add_column("Bitrate", justify="right")
     table.add_column("Resolution")
     table.add_column("HDR")
@@ -1121,15 +1120,14 @@ def _cli_tracks(  # noqa: C901
                 str(track.type.name if track.type else ""),
                 str(track.type_index),
                 str(track.codec_name),
-                str(track.sample_fmt or _em_dash),
                 str(
                     humanize.naturalsize(
-                        int(track.bits_per_raw_sample or 0),
+                        track.tags.bps,
                         binary=True,
                         gnu=True,
                     )
                     + "/s"
-                    if track.bits_per_raw_sample
+                    if track.tags.bps
                     else _em_dash
                 ),
                 resolution,
