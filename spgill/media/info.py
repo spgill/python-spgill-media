@@ -143,7 +143,10 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     is_eac3: bool
     is_dts: bool
     is_dtshd: bool
+    is_dtsx: bool
     is_truehd: bool
+    is_atmos: bool
+    is_object: bool
 
     # Subtitle track flags
     is_text: bool
@@ -535,9 +538,11 @@ class Track(pydantic.BaseModel):
             "is_ac3": "_ac3" in (self.codec_name or "").lower(),
             "is_eac3": "eac3" in (self.codec_name or "").lower(),
             "is_dts": "dts" in (self.codec_name or "").lower(),
-            "is_dtshd": "dts" in (self.codec_name or "").lower()
-            and "hd" in (self.profile or "").lower(),
+            "is_dtshd": self.is_dts_hd_ma,
+            "is_dtsx": self.is_dts_x,
             "is_truehd": "truehd" in (self.codec_name or "").lower(),
+            "is_atmos": self.is_atmos,
+            "is_object": self.is_object_surround,
             # Subtitle track flags
             "is_image": self.codec_name in _subtitle_image_codecs,
             "is_text": self.codec_name not in _subtitle_image_codecs,
@@ -1126,6 +1131,14 @@ def _cli_tracks(  # noqa: C901
 
         # Add a row for each track
         for j, track in enumerate(track_list):
+            codec = track.codec_name or ""
+            if track.is_atmos:
+                codec += " + atmos"
+            if track.is_dts_hd_ma:
+                codec = "dts-hd"
+            if track.is_dts_x:
+                codec += " + dts:x"
+
             resolution = ""
             if track.width:
                 resolution = f"{track.width}x{track.height}"
@@ -1161,7 +1174,7 @@ def _cli_tracks(  # noqa: C901
                 str(track.index),
                 str(track.type.name if track.type else ""),
                 str(track.type_index),
-                str(track.codec_name),
+                codec,
                 str(
                     humanize.naturalsize(
                         track.tags.bps,
