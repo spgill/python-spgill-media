@@ -438,6 +438,12 @@ class Track(pydantic.BaseModel):
 
     @property
     def dovi_layers(self) -> set[DolbyVisionLayer]:
+        """
+        Return a set representing the Dolby Vision layers (BL, EL, RPU) present
+        in the video stream.
+
+        On a non-DoVi track or a non-video track, an empty set will be returned.
+        """
         layers: set[DolbyVisionLayer] = set()
         config = self.dovi_configuration
         if config.get("bl_present_flag", 0):
