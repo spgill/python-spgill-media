@@ -1115,7 +1115,7 @@ def _cli_tracks(  # noqa: C901
                     dovi_col = f"{track.dovi_profile}.{track.dovi_level} {'+'.join(layers)}"
 
             columns: list[typing.Union[str, None]] = [
-                str(path),
+                f"[yellow]{path}[/]",
                 str(track.index),
                 str(track.type.name if track.type else ""),
                 str(track.type_index),
