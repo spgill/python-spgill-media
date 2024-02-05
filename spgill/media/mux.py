@@ -8,6 +8,7 @@ a Matroska file.
 ### stdlib imports
 import enum
 import pathlib
+import re
 import typing
 
 ### vendor imports
@@ -427,7 +428,7 @@ class MuxJob:
             if "forced" in name:
                 new_options[TrackOption.Forced] = True
 
-            if "sdh" in name:
+            if "sdh" in name or re.search(r"(?:\W|^)cc(?:\W|$)", name, re.I):
                 new_options[TrackOption.HearingImpaired] = True
 
             if "descriptive" in name or "descriptions" in name:
