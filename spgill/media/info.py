@@ -454,6 +454,32 @@ class Track(pydantic.BaseModel):
             layers.add(DolbyVisionLayer.RPU)
         return layers
 
+    @property
+    def is_atmos(self) -> bool:
+        """
+        Returns `True` if the track contains Dolby Atmos object-based surround
+        data.
+
+        Valid for E-AC-3 and TrueHD audio tracks.
+        """
+        return "atmos" in (self.profile or "").lower()
+
+    @property
+    def is_dts_x(self) -> bool:
+        """
+        Returns `True` if the track contains DTS:X object-based surround data.
+
+        Valid only for DTS-HD MA audio tracks.
+        """
+        return "dts:x" in (self.profile or "").lower()
+
+    @property
+    def is_object_surround(self) -> bool:
+        """
+        Returns `True` if the audio track contains object-based surround data.
+        """
+        return self.is_atmos or self.is_dts_x
+
     def __repr__(self) -> str:
         attributes = ["index", "type", "codec_name", "name", "language"]
         formatted_attributes: list[str] = []
