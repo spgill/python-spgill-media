@@ -555,6 +555,10 @@ class MuxJob:
                 current_options.get(TrackOption.Default, track.flags.default)
             )
 
+            is_forced = bool(
+                current_options.get(TrackOption.Forced, track.flags.forced)
+            )
+
             is_hi = bool(
                 current_options.get(
                     TrackOption.HearingImpaired,
@@ -590,9 +594,9 @@ class MuxJob:
 
             # Sub track rules
             if track.type is info.TrackType.Subtitle:
-                # Name not necessary if it's the default track and has a language
-                # identifier
-                if is_default and language:
+                # Name not necessary if it's the default/forced track and has a
+                # language identifier
+                if (is_default or is_forced) and language:
                     new_options[TrackOption.Name] = ""
 
                 # If it's an HI track give it the title "SDH" because not all video
