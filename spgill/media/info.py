@@ -480,6 +480,16 @@ class Track(pydantic.BaseModel):
         """
         return self.is_atmos or self.is_dts_x
 
+    @property
+    def is_dts_hd_ma(self) -> bool:
+        """
+        Returns `True` if the track is a DTS HD Master Audio track.
+
+        This is necessary because all DTS tracks from OG all the way up to
+        DTS:X have the same `codec_name` value.
+        """
+        return "dts-hd" in (self.profile or "").lower()
+
     def __repr__(self) -> str:
         attributes = ["index", "type", "codec_name", "name", "language"]
         formatted_attributes: list[str] = []
