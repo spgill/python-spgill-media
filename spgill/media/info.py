@@ -1133,11 +1133,11 @@ def _cli_tracks(  # noqa: C901
         for j, track in enumerate(track_list):
             codec = track.codec_name or ""
             if track.is_atmos:
-                codec += " + atmos"
+                codec += "+atmos"
             if track.is_dts_hd_ma:
-                codec = "dts-hd"
+                codec += "+dts:hd"
             if track.is_dts_x:
-                codec += " + dts:x"
+                codec += "+dts:x"
 
             resolution = ""
             if track.width:
