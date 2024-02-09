@@ -9,6 +9,7 @@ a Matroska file.
 import enum
 import pathlib
 import re
+import secrets
 import typing
 
 ### vendor imports
@@ -220,8 +221,34 @@ class MuxJob:
         output_container_options: typing.Optional[
             OutputContainerOptionDict
         ] = None,
+        mux_in_place: bool = False,
+        temporary_directory: typing.Optional[pathlib.Path] = None,
     ) -> None:
+        """
+        Initialize a new media muxing job. Does not execute until the `run`
+        method is called.
+
+        Args:
+            output: The final output path of the new media container.
+            output_container_options: Options to be applied to the new media
+                container.
+            mux_in_place: If `True`, the output file will be muxed in-place
+                and a temporary file will not be created.
+            temporary_directory: If `mux_in_place` is not being used, this
+                argument will specify a directory where the temporary file will
+                be written to. The default is the same directory as the output.
+
+        """
         self.output = output
+        self.mux_in_place = mux_in_place
+
+        # Generate the temporary output path
+        self._temp_suffix = f".tmp_{secrets.token_hex(3)}"
+        self.output_temp = output.with_suffix(self._temp_suffix)
+        if temporary_directory:
+            self.output_temp = (temporary_directory / output.name).with_suffix(
+                self._temp_suffix
+            )
 
         # Initialize all of the options instance vars
         self._output_container_options = output_container_options or {}
@@ -623,7 +650,7 @@ class MuxJob:
 
         1.  If `infer_flags_from_name == True`, then the track names will be used
             to assign flags to the track; "commentary" will infer the commentary
-            flag, "SDH" will infer the hearing_impaired flag, etc.
+            flag, "SDH" or "CC" will infer the hearing_impaired flag, etc.
 
         2.  The tracks will be organized by language and type and (approx.) the
             first track of any given language and type will be assigned as the default
@@ -715,7 +742,13 @@ class MuxJob:
         self,
     ) -> typing.Generator[str, None, None]:
         yield "--output"
-        yield str(self.output)
+
+        # If we're muxing in place, then yield the final output path. Else, we
+        # yield the temporary output.
+        if self.mux_in_place:
+            yield str(self.output)
+        else:
+            yield str(self.output_temp)
 
         options = self.get_output_container_options()
         for option_type, option_value in options.items():
@@ -787,7 +820,13 @@ class MuxJob:
         yield ",".join(stream_order_pairs)
 
     def run(self, /, warnings_are_fatal=False):
-        """Run the mux job command. Blocks until the command process exits."""
+        """
+        Run the mux job command. Blocks until the command process exits.
+
+        Args:
+            warnings_are_fatal: If `True`, any warning emitted by `mkvmerge`
+                will raise an exception.
+        """
         if len(self._track_order) == 0:
             raise RuntimeError(
                 "You tried to execute a mux job with no tracks."
@@ -796,6 +835,13 @@ class MuxJob:
         tools.run_command_politely(
             _mkvmerge,
             arguments=list(self._generate_command_arguments()),
-            cleanup_paths=[self.output],
+            cleanup_paths=[
+                self.output if self.mux_in_place else self.output_temp
+            ],
             warnings_are_fatal=warnings_are_fatal,
         )
+
+        # If the file was not muxed in place, we need to move it to the final
+        # output path.
+        if not self.mux_in_place:
+            self.output_temp.rename(self.output)
