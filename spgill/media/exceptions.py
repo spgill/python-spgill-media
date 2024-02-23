@@ -38,6 +38,11 @@ class _ContainerException(Exception):
         self._container = container
 
 
+class ContainerCannotBeRead(_ContainerException):
+    def __str__(self) -> str:
+        return f"The file at '{self._container}' was unable to be read by 'ffprobe'. You should inspect the file for errors."
+
+
 class NotMatroskaContainer(_ContainerException):
     def __str__(self) -> str:
         return f"You tried to invoke a function that can only be used on Matroska containers: {self._container!r}"

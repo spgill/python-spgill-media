@@ -686,25 +686,28 @@ class Container(pydantic.BaseModel):
 
     @classmethod
     def _probe(cls, path: pathlib.Path) -> str:
-        probe_result = _ffprobe(
-            "-hide_banner",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "-show_chapters",
-            "-show_frames",
-            "-read_intervals",
-            "%+#10",
-            "-show_entries",
-            "frame=stream_index,side_data_list",
-            "-i",
-            path,
-        )
-        assert isinstance(probe_result, str)
-        return probe_result
+        try:
+            probe_result = _ffprobe(
+                "-hide_banner",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                "-show_chapters",
+                "-show_frames",
+                "-read_intervals",
+                "%+#10",
+                "-show_entries",
+                "frame=stream_index,side_data_list",
+                "-i",
+                path,
+            )
+            assert isinstance(probe_result, str)
+            return probe_result
+        except sh.ErrorReturnCode:
+            raise exceptions.ContainerCannotBeRead(path)
 
     @classmethod
     def open(cls, path: pathlib.Path) -> "Container":
@@ -1126,7 +1129,12 @@ def _cli_tracks(  # noqa: C901
             transient=True,
         )
     ):
-        container = Container.open(path)
+        try:
+            container = Container.open(path)
+        except exceptions.ContainerCannotBeRead:
+            table.add_row(f"[red]{path}[/] (READ ERROR)", end_section=True)
+            continue
+
         track_list = container.select_tracks(selector)
 
         # Add a row for each track
