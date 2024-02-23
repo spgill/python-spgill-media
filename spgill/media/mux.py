@@ -222,7 +222,7 @@ class MuxJob:
             OutputContainerOptionDict
         ] = None,
         mux_in_place: bool = False,
-        temporary_directory: typing.Optional[pathlib.Path] = None,
+        partial_dir: typing.Optional[pathlib.Path] = None,
     ) -> None:
         """
         Initialize a new media muxing job. Does not execute until the `run`
@@ -234,9 +234,9 @@ class MuxJob:
                 container.
             mux_in_place: If `True`, the output file will be muxed in-place
                 and a temporary file will not be created.
-            temporary_directory: If `mux_in_place` is not being used, this
-                argument will specify a directory where the temporary file will
-                be written to. The default is the same directory as the output.
+            partial_dir: If `mux_in_place` is not being used, this argument
+                specifies a directory where the partial files will be written
+                to. The default is the same directory as the output.
 
         """
         self.output = output
@@ -245,8 +245,8 @@ class MuxJob:
         # Generate the temporary output path
         self._temp_suffix = f".tmp_{secrets.token_hex(3)}"
         self.output_temp = output.with_suffix(self._temp_suffix)
-        if temporary_directory:
-            self.output_temp = (temporary_directory / output.name).with_suffix(
+        if partial_dir:
+            self.output_temp = (partial_dir / output.name).with_suffix(
                 self._temp_suffix
             )
 
