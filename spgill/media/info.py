@@ -89,6 +89,8 @@ class SideDataType(enum.Enum):
     MasterDisplayMeta = "Mastering display metadata"
     ContentLightMeta = "Content light level metadata"
 
+    ClosedCaptions = "ATSC A53 Part 4 Closed Captions"
+
 
 class HDRFormat(enum.Enum):
     """Recognized HDR formats."""
@@ -212,6 +214,7 @@ class Track(pydantic.BaseModel):
     color_transfer: typing.Optional[str] = None
     color_primaries: typing.Optional[str] = None
     chroma_location: typing.Optional[str] = None
+    closed_captions: typing.Optional[bool] = None
 
     # Audio fields
     profile: typing.Optional[str] = None
@@ -492,6 +495,24 @@ class Track(pydantic.BaseModel):
         DTS:X have the same `codec_name` value.
         """
         return "dts-hd" in (self.profile or "").lower()
+
+    @property
+    def has_closed_captions(self) -> bool:
+        """
+        Returns `True` if the video track contains embedded closed captions.
+
+        Unforunately, there's no way to know how many closed caption tracks
+        and their language without additional tooling.
+        """
+        if self.container:
+            return bool(self.closed_captions) or bool(
+                list(
+                    self.container.get_frame_side_data(
+                        self.index, SideDataType.ClosedCaptions
+                    )
+                )
+            )
+        return bool(self.closed_captions)
 
     def __repr__(self) -> str:
         attributes = ["index", "type", "codec_name", "name", "language"]
@@ -1140,12 +1161,19 @@ def _cli_tracks(  # noqa: C901
         # Add a row for each track
         for j, track in enumerate(track_list):
             codec = track.codec_name or ""
+
+            # Add suffix to the codec if the audio track has additional
+            # information not visible in just the codec
             if track.is_atmos:
                 codec += "+atmos"
             if track.is_dts_hd_ma:
                 codec += "+dts:hd"
             if track.is_dts_x:
                 codec += "+dts:x"
+
+            # If there's closed captioning embedded in the video, add a suffix
+            if track.has_closed_captions:
+                codec += "+cc"
 
             resolution = ""
             if track.width:
