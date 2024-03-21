@@ -719,7 +719,7 @@ class Container(pydantic.BaseModel):
                 "-show_chapters",
                 "-show_frames",
                 "-read_intervals",
-                "%+#10",
+                "%+#50",
                 "-show_entries",
                 "frame=stream_index,side_data_list",
                 "-i",
