@@ -482,7 +482,7 @@ class MuxJob:
         # Next we will iterate through the tracks of each language and identify
         # candidates for default track. If a track is disqualified as a candidate
         # its flag will be immediate set to false
-        for _, tracks_by_type in tracks_by_language_by_type.items():
+        for language, tracks_by_type in tracks_by_language_by_type.items():
             for _, tracks in tracks_by_type.items():
                 default_found: bool = False
                 alternate: typing.Optional[info.Track] = None
@@ -547,7 +547,9 @@ class MuxJob:
 
                 # If by some stroke of dumb luck a default track was not found,
                 # then we need to debug
-                assert default_found
+                assert (
+                    default_found
+                ), f"No default track found for language '{language}'. Try re-examining the languages of all tracks in the job and the source containers."
 
     def _assign_sensible_names(self) -> None:
         # Determine if there are multiple video tracks
