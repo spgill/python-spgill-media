@@ -545,11 +545,9 @@ class MuxJob:
                         alternate, {TrackOption.Default: True}
                     )
 
-                # If by some stroke of dumb luck a default track was not found,
-                # then we need to debug
-                assert (
-                    default_found
-                ), f"No default track found for language '{language}'. Try re-examining the languages of all tracks in the job and the source containers."
+                # It's possible to not have a default track for a language. For
+                # instance, imagine a German film with a single English
+                # commentary track.
 
     def _assign_sensible_names(self) -> None:
         # Determine if there are multiple video tracks
