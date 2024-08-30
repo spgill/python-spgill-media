@@ -107,6 +107,14 @@ class DolbyVisionLayer(enum.Enum):
     RPU = "RPU"
 
 
+class FieldOrder(enum.Enum):
+    Progressive = "progressive"
+    TopCodedAndDisplayedFirst = "tt"
+    BottomCodedAndDisplayedFirst = "bb"
+    TopCodedBottomDisplayedFirst = "tb"
+    BottomCodedTopDisplayedFirst = "bt"
+
+
 class TrackSelectorValues(typing.TypedDict, total=True):
     """Selector flags used for simple selection of tracks from a container (specifically from the CLI)."""
 
@@ -207,7 +215,7 @@ class Track(pydantic.BaseModel):
     display_aspect_ratio: typing.Optional[str] = None
     pix_fmt: typing.Optional[str] = None
     level: typing.Optional[int] = None
-    field_order: typing.Optional[str] = None
+    field_order: typing.Optional[FieldOrder] = None
     avg_frame_rate: typing.Optional[str] = None
     color_range: typing.Optional[str] = None
     color_space: typing.Optional[str] = None
@@ -513,6 +521,23 @@ class Track(pydantic.BaseModel):
                 )
             )
         return bool(self.closed_captions)
+
+    @property
+    def is_interlaced(self) -> bool:
+        """Returns `True` if the video track is interlaced."""
+        return (
+            self.type is TrackType.Video
+            and self.field_order is not None
+            and self.field_order is not FieldOrder.Progressive
+        )
+
+    @property
+    def is_progressive(self) -> bool:
+        """Returns `True` if the video track is progressively scanned."""
+        return self.type is TrackType.Video and (
+            self.field_order is None
+            or self.field_order is FieldOrder.Progressive
+        )
 
     def __repr__(self) -> str:
         attributes = ["index", "type", "codec_name", "name", "language"]
