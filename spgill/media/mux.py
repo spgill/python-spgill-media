@@ -44,7 +44,9 @@ class _BooleanOptionFormatter(_BaseOptionFormatter):
     def format(
         self, value: OptionValueType, track: typing.Optional[info.Track]
     ) -> list[str]:
-        assert isinstance(value, bool)
+        assert isinstance(
+            value, bool
+        ), f"Expected value of option '{self.option}' to be a boolean"
         if track is not None:
             return [self.option, f"{track.index}:{int(value)}"]
         return [self.option, str(int(value))]
@@ -54,7 +56,23 @@ class _StringOptionFormatter(_BaseOptionFormatter):
     def format(
         self, value: OptionValueType, track: typing.Optional[info.Track]
     ) -> list[str]:
-        assert isinstance(value, (str, pathlib.Path))
+        assert isinstance(
+            value, (str, pathlib.Path)
+        ), f"Expected value of option '{self.option}' to be a string or a path"
+        if track is not None:
+            return [self.option, f"{track.index}:{value}"]
+        return [self.option, str(value)]
+
+
+class _IntOptionFormatter(_BaseOptionFormatter):
+    """CURRENTLY UNUSED"""
+
+    def format(
+        self, value: OptionValueType, track: typing.Optional[info.Track]
+    ) -> list[str]:
+        assert isinstance(
+            value, int
+        ), f"Expected value of option '{self.option}' to be an int"
         if track is not None:
             return [self.option, f"{track.index}:{value}"]
         return [self.option, str(value)]
@@ -104,6 +122,9 @@ class TrackOption(enum.Enum):
 
     Charset = enum.auto()
     """Sets the character set for the conversion to UTF-8 for UTF-8 subtitles. If not specified the charset will be derived from the current locale settings."""
+
+    Sync = enum.auto()
+    """Apply a time delay to a track."""
 
     # Boolean track flags
     Default = enum.auto()
@@ -180,6 +201,7 @@ _option_formatters: dict[_AnyOption, _BaseOptionFormatter] = {
     TrackOption.OriginalLanguage: _BooleanOptionFormatter("--original-flag"),
     TrackOption.Commentary: _BooleanOptionFormatter("--commentary-flag"),
     TrackOption.ReduceToCore: _UnaryOptionFormatter("--reduce-to-core"),
+    TrackOption.Sync: _StringOptionFormatter("--sync"),
 }
 """Mapping of all output/container/track options to the correct formatter types."""
 
