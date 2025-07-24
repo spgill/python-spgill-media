@@ -731,7 +731,7 @@ class Container(pydantic.BaseModel):
         return language_groups
 
     @classmethod
-    def _probe(cls, path: pathlib.Path) -> str:
+    def _probe(cls, path: pathlib.Path, fields: int = 1) -> str:
         try:
             probe_result = _ffprobe(
                 "-hide_banner",
@@ -744,7 +744,7 @@ class Container(pydantic.BaseModel):
                 "-show_chapters",
                 "-show_frames",
                 "-read_intervals",
-                "%+#50",
+                f"%+#{fields}",
                 "-show_entries",
                 "frame=stream_index,side_data_list",
                 "-i",
@@ -756,9 +756,9 @@ class Container(pydantic.BaseModel):
             raise exceptions.ContainerCannotBeRead(path)
 
     @classmethod
-    def open(cls, path: pathlib.Path) -> "Container":
+    def open(cls, path: pathlib.Path, probe_fields: int = 1) -> "Container":
         """Open a media container by its path and return a new `Container` instance."""
-        raw_json = cls._probe(path)
+        raw_json = cls._probe(path, probe_fields)
 
         # Parse the JSON into a new instance
         instance = Container.model_validate_json(raw_json)
@@ -1074,9 +1074,10 @@ _cli_app = typer.Typer()
 def _cli_probe(
     path: typing.Annotated[
         pathlib.Path, typer.Argument(help="Path to the media file.")
-    ]
+    ],
+    fields: typing.Annotated[int, typer.Option('--fields', '-f', help="The number of fields (packets) to read from the video stream when looking for metadata.")] = 1
 ):
-    print(Container._probe(path))
+    print(Container._probe(path, fields))
 
 
 _default_cli_extensions: list[str] = [".mkv", ".mp4", ".m4v", ".wmv", ".avi"]
