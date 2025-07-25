@@ -9,6 +9,7 @@ but some operations can only be performed on Matroska files.
 import enum
 import pathlib
 import re
+import sys
 import typing
 
 # vendor imports
@@ -342,6 +343,8 @@ class Track(pydantic.BaseModel):
         """
         return bool(self.hdr_formats)
 
+    _experimental__re_probe_for_mastering_data = False
+
     @property
     def hdr_master_display(self) -> typing.Optional[str]:
         """
@@ -360,8 +363,39 @@ class Track(pydantic.BaseModel):
                 self.index, SideDataType.MasterDisplayMeta
             )
         )
-        if not len(found_side_data):
+
+        # If no mastering data was found _and_ the experimental re-probe option
+        # isn't enabled, then we just return None
+        if (
+            not found_side_data
+            and not self._experimental__re_probe_for_mastering_data
+        ):
             return None
+
+        # If the experimental re-probe option is on we keep probing the file
+        # until it's found
+        fields = 1000
+        while not found_side_data:
+            new_container = Container.open(
+                self.container.format.filename, fields
+            )
+            self.container.frames = new_container.frames
+            found_side_data = list(
+                self.container.get_frame_side_data(
+                    self.index, SideDataType.MasterDisplayMeta
+                )
+            )
+
+            fields *= 2
+
+            # Impose some sort of rational limit so that the process will
+            # eventually have a hard timeout
+            if fields >= 1000000:
+                sys.stderr.write(
+                    "\nERR: DURING EXPERIMENTAL FEATURE OVER 1,000,000 FRAMES WERE PROBED AND NO MASTERING DATA WAS FOUND. ABORTING!\n\n"
+                )
+                exit(1)
+
         display_data = found_side_data[0]
 
         # Read all of the display master values and convert them to compatible int values
