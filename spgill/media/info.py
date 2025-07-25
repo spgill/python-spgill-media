@@ -1075,7 +1075,14 @@ def _cli_probe(
     path: typing.Annotated[
         pathlib.Path, typer.Argument(help="Path to the media file.")
     ],
-    fields: typing.Annotated[int, typer.Option('--fields', '-f', help="The number of fields (packets) to read from the video stream when looking for metadata.")] = 1
+    fields: typing.Annotated[
+        int,
+        typer.Option(
+            "--fields",
+            "-f",
+            help="The number of fields (packets) to read from the video stream when looking for metadata.",
+        ),
+    ] = 1,
 ):
     print(Container._probe(path, fields))
 
