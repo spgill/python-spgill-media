@@ -32,6 +32,11 @@ class TrackNoParentContainer(_TrackException):
         return f"Track has no Container bound as parent: {self._track!r}"
 
 
+class MissingMasteringDisplayMetadata(_TrackException):
+    def __str__(self) -> str:
+        return f"Video track has content light level metadata but appears to be missing the mastering display metadata: {self._track!r}"
+
+
 class _ContainerException(Exception):
     # We can't use the actual container type because it would cause a circular import
     def __init__(self, container: typing.Any) -> None:

@@ -9,7 +9,6 @@ but some operations can only be performed on Matroska files.
 import enum
 import pathlib
 import re
-import sys
 import typing
 
 # vendor imports
@@ -96,6 +95,7 @@ class SideDataType(enum.Enum):
 class HDRFormat(enum.Enum):
     """Recognized HDR formats."""
 
+    PQ10 = "pq10"
     HDR10 = "hdr10"
     HDR10Plus = "hdr10plus"
     DolbyVision = "dolbyvision"
@@ -303,7 +303,10 @@ class Track(pydantic.BaseModel):
         # Detecting HDR10 and HLG is just a matter of reading the video track's
         # color transfer attribute
         if self.color_transfer == "smpte2084":
-            formats.add(HDRFormat.HDR10)
+            if self.hdr10_metadata is None:
+                formats.add(HDRFormat.PQ10)
+            else:
+                formats.add(HDRFormat.HDR10)
         elif self.color_transfer == "arib-std-b67":
             formats.add(HDRFormat.HLG)
 
@@ -343,113 +346,125 @@ class Track(pydantic.BaseModel):
         """
         return bool(self.hdr_formats)
 
-    _experimental__re_probe_for_mastering_data = False
-
     @property
-    def hdr_master_display(self) -> typing.Optional[str]:
-        """
-        Return a string representing the video track's mastering display metadata.
-        This string can be passed to libx265's `master-display` option.
-        """
+    def hdr10_metadata(
+        self,
+    ) -> typing.Optional[
+        tuple[dict[str, typing.Any], typing.Optional[dict[str, typing.Any]]]
+    ]:
         if self.type is not TrackType.Video:
             return None
 
         if self.container is None:
             raise exceptions.TrackNoParentContainer(self)
 
-        # First we fetch the master display side data
-        found_side_data = list(
+        # Begin by searching the frame side data for the mastering display
+        # metadata and the content light level metadata
+        found_display_meta = list(
             self.container.get_frame_side_data(
                 self.index, SideDataType.MasterDisplayMeta
             )
         )
+        found_light_level = list(
+            self.container.get_frame_side_data(
+                self.index, SideDataType.ContentLightMeta
+            )
+        )
 
-        # If no mastering data was found _and_ the experimental re-probe option
-        # isn't enabled, then we just return None
-        if (
-            not found_side_data
-            and not self._experimental__re_probe_for_mastering_data
-        ):
+        # If the light level meta is found but not the display... Houston
+        # we have a problem
+        if found_light_level and not found_display_meta:
+            raise exceptions.MissingMasteringDisplayMetadata(self)
+
+        # If no display metadata is found, return nothing because this is likely
+        # a PQ10 HDR video
+        if not found_display_meta:
             return None
 
-        # If the experimental re-probe option is on we keep probing the file
-        # until it's found
-        fields = 1000
-        while not found_side_data:
-            new_container = Container.open(
-                self.container.format.filename, fields
-            )
-            self.container.frames = new_container.frames
-            found_side_data = list(
-                self.container.get_frame_side_data(
-                    self.index, SideDataType.MasterDisplayMeta
-                )
-            )
+        # If not light level metadata is found, that's normal and we'll return
+        # just the display metadata
+        if not found_light_level:
+            return (found_display_meta[0], None)
 
-            fields *= 2
+        # Ideally we have both and they can be returned
+        return (found_display_meta[0], found_light_level[0])
 
-            # Impose some sort of rational limit so that the process will
-            # eventually have a hard timeout
-            if fields >= 1000000:
-                sys.stderr.write(
-                    "\nERR: DURING EXPERIMENTAL FEATURE OVER 1,000,000 FRAMES WERE PROBED AND NO MASTERING DATA WAS FOUND. ABORTING!\n\n"
-                )
-                exit(1)
+    @property
+    def hdr10_mastering_display_color_volume(self) -> typing.Optional[str]:
+        """
+        Return a string representing the video track's HDR10 mastering display
+        color volume metadata (SMPTE ST 2086).
 
-        display_data = found_side_data[0]
+        Ex:
+
+        "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+
+        This string can be passed directly to libx265's `master-display` option.
+        """
+        if self.hdr10_metadata is None:
+            return None
+
+        display_metadata = self.hdr10_metadata[0]
 
         # Read all of the display master values and convert them to compatible int values
-        red_x = tools.parse_display_fraction(display_data["red_x"], 50000)
-        red_y = tools.parse_display_fraction(display_data["red_y"], 50000)
+        red_x = tools.parse_display_fraction(display_metadata["red_x"], 50000)
+        red_y = tools.parse_display_fraction(display_metadata["red_y"], 50000)
 
-        green_x = tools.parse_display_fraction(display_data["green_x"], 50000)
-        green_y = tools.parse_display_fraction(display_data["green_y"], 50000)
+        green_x = tools.parse_display_fraction(
+            display_metadata["green_x"], 50000
+        )
+        green_y = tools.parse_display_fraction(
+            display_metadata["green_y"], 50000
+        )
 
-        blue_x = tools.parse_display_fraction(display_data["blue_x"], 50000)
-        blue_y = tools.parse_display_fraction(display_data["blue_y"], 50000)
+        blue_x = tools.parse_display_fraction(
+            display_metadata["blue_x"], 50000
+        )
+        blue_y = tools.parse_display_fraction(
+            display_metadata["blue_y"], 50000
+        )
 
         white_point_x = tools.parse_display_fraction(
-            display_data["white_point_x"], 50000
+            display_metadata["white_point_x"], 50000
         )
         white_point_y = tools.parse_display_fraction(
-            display_data["white_point_y"], 50000
+            display_metadata["white_point_y"], 50000
         )
 
         min_luminance = tools.parse_display_fraction(
-            display_data["min_luminance"], 10000
+            display_metadata["min_luminance"], 10000
         )
         max_luminance = tools.parse_display_fraction(
-            display_data["max_luminance"], 10000
+            display_metadata["max_luminance"], 10000
         )
 
         # Return them all as a formatted string
         return f"G({green_x},{green_y})B({blue_x},{blue_y})R({red_x},{red_y})WP({white_point_x},{white_point_y})L({max_luminance},{min_luminance})"
 
     @property
-    def hdr_content_light_level(self) -> typing.Optional[str]:
+    def hdr10_content_light_level(self) -> typing.Optional[str]:
         """
-        Return a string representing the video track's content light level data.
-        This string can be passed to libx265's `max-cll` option.
+        Return a string representing both the video track's HDR10 maximum
+        content light level metadata (MaxCLL) _and_ the maximum frame average
+        light level (MaxFALL). If this metadata is not found in the video
+        (somewhat uncommon) then a value of `"0,0"` will be returned.
+
+        Example:
+
+        “1000,400”
+
+        This string can be passed directly to libx265's `max-cll` option.
         """
-        if self.type is not TrackType.Video:
+        if self.hdr10_metadata is None:
             return None
 
-        if self.container is None:
-            raise exceptions.TrackNoParentContainer(self)
-
-        # First we fetch the master display side data
-        found_side_data = list(
-            self.container.get_frame_side_data(
-                self.index, SideDataType.ContentLightMeta
-            )
-        )
-        if not len(found_side_data):
-            return None
-        light_level_data = found_side_data[0]
+        light_level_metadata = self.hdr10_metadata[1]
+        if light_level_metadata is None:
+            return "0,0"
 
         # Parse the metadata fields and return a formatted string
-        max_content_light = light_level_data.get("max_content", 0)
-        max_average_light = light_level_data.get("max_average", 0)
+        max_content_light = light_level_metadata.get("max_content", 0)
+        max_average_light = light_level_metadata.get("max_average", 0)
         return f"{max_content_light},{max_average_light}"
 
     @property
