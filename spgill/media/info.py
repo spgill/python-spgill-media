@@ -143,6 +143,7 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     is_hevc: bool
     is_avc: bool
     is_hdr: bool
+    is_pq10: bool
     is_hdr10: bool
     is_hlg: bool
     is_dovi: bool
@@ -630,6 +631,7 @@ class Track(pydantic.BaseModel):
             "is_hevc": "hevc" in (self.codec_name or "").lower(),
             "is_avc": "avc" in (self.codec_name or "").lower(),
             "is_hdr": self.is_hdr,
+            "is_pq10": HDRFormat.PQ10 in self.hdr_formats,
             "is_hdr10": HDRFormat.HDR10 in self.hdr_formats,
             "is_hlg": HDRFormat.HLG in self.hdr_formats,
             "is_dovi": HDRFormat.DolbyVision in self.hdr_formats,
@@ -716,12 +718,18 @@ class Container(pydantic.BaseModel):
 
     format: ContainerFormat
     tracks: list[Track] = pydantic.Field(
-        alias="streams"
+        alias="streams", default_factory=list
     )  # We alias this to "streams", because we prefer mkv terminology
-    chapters: list[Chapter]
+    chapters: list[Chapter] = pydantic.Field(default_factory=list)
 
-    frames: list[ContainerFrameData]
-    """List of frame data captured from `ffprobe`. Only useful for identifying frame side data."""
+    frames: list[ContainerFrameData] = pydantic.Field(default_factory=list)
+    """
+    List of frame data captured from `ffprobe`. Only useful for identifying
+    frame side data.
+
+    Not guaranteed to be in chronological order because probes of this data
+    are performed on-demand.
+    """
 
     attachments: list[Track] = pydantic.Field(default_factory=list)
     """List of container attachment files."""
@@ -786,7 +794,7 @@ class Container(pydantic.BaseModel):
         return language_groups
 
     @classmethod
-    def _probe(cls, path: pathlib.Path, fields: int = 1) -> str:
+    def _probe(cls, path: pathlib.Path) -> str:
         try:
             probe_result = _ffprobe(
                 "-hide_banner",
@@ -797,11 +805,6 @@ class Container(pydantic.BaseModel):
                 "-show_format",
                 "-show_streams",
                 "-show_chapters",
-                "-show_frames",
-                "-read_intervals",
-                f"%+#{fields}",
-                "-show_entries",
-                "frame=stream_index,side_data_list",
                 "-i",
                 path,
             )
@@ -810,14 +813,56 @@ class Container(pydantic.BaseModel):
         except sh.ErrorReturnCode:
             raise exceptions.ContainerCannotBeRead(path)
 
+    _deep_probed_tracks: typing.Optional[set[int]] = None
+
+    def _deep_probe_frames(self, track_index: int):
+        # Quick sanity check
+        assert self._path is not None
+
+        # Initialize the instance variable if not already done
+        if self._deep_probed_tracks is None:
+            self._deep_probed_tracks = set()
+
+        # If the track has not already been deep probed, then proceed
+        if track_index not in self._deep_probed_tracks:
+            self._deep_probed_tracks.add(track_index)
+            try:
+                # Run the ffprobe and parse it into a (partial) Container object
+                results_json = _ffprobe(
+                    "-hide_banner",
+                    "-v",
+                    "quiet",
+                    "-print_format",
+                    "json",
+                    "-show_format",
+                    "-select_streams",
+                    str(track_index),
+                    "-show_frames",
+                    "-read_intervals",
+                    "%+#1",
+                    "-show_entries",
+                    "frame=stream_index,side_data_list",
+                    "-i",
+                    self._path,
+                )
+                assert isinstance(results_json, str)
+                results = Container.model_validate_json(results_json)
+
+                # Take the parsed frames and add them into the main list
+                self.frames.extend(results.frames)
+            except sh.ErrorReturnCode:
+                raise exceptions.ContainerCannotBeRead(self._path)
+
+    _path: typing.Optional[pathlib.Path] = None
+
     @classmethod
-    def open(cls, path: pathlib.Path, probe_fields: int = 1) -> "Container":
+    def open(cls, path: pathlib.Path) -> "Container":
         """Open a media container by its path and return a new `Container` instance."""
-        raw_json = cls._probe(path, probe_fields)
+        raw_json = cls._probe(path)
 
         # Parse the JSON into a new instance
         instance = Container.model_validate_json(raw_json)
-        assert not isinstance(instance, list)
+        instance._path = path
 
         # Bind all the tracks back to this container
         for track in instance.tracks:
@@ -1111,6 +1156,11 @@ class Container(pydantic.BaseModel):
         self, track_index: int, data_type: SideDataType
     ) -> typing.Generator[dict[str, typing.Any], None, None]:
         """For a given track index, yield all side data entries that match the given type."""
+        # Before perusing the frames, make sure that the track in question has
+        # been deep probed for frame side data
+        self._deep_probe_frames(track_index)
+
+        # Identify any side data belonging to the track and yield it
         for frame in self.frames:
             if frame.track_index == track_index:
                 for side_data in frame.side_data_list:
@@ -1139,7 +1189,7 @@ def _cli_probe(
         ),
     ] = 1,
 ):
-    print(Container._probe(path, fields))
+    print(Container._probe(path))
 
 
 _default_cli_extensions: list[str] = [".mkv", ".mp4", ".m4v", ".wmv", ".avi"]
