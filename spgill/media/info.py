@@ -561,6 +561,12 @@ class Track(pydantic.BaseModel):
         Unforunately, there's no way to know how many closed caption tracks
         and their language without additional tooling.
         """
+        if self.type is not TrackType.Video:
+            return False
+
+        if self.container is None:
+            raise exceptions.TrackNoParentContainer(self)
+
         if self.container:
             return bool(self.closed_captions) or bool(
                 list(
