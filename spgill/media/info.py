@@ -1344,8 +1344,8 @@ def _cli_tracks(  # noqa: C901
 
                     dovi_col = f"{track.dovi_profile}.{track.dovi_level} {'+'.join(layers)}"
 
-            columns: list[typing.Union[str, None]] = [
-                f"[yellow]{path}[/]",
+            columns: list[rich.text.Text | str | None] = [
+                rich.text.Text(str(path), style="yellow"),
                 str(track.index),
                 str(track.type.name if track.type else ""),
                 str(track.type_index),
@@ -1379,7 +1379,7 @@ def _cli_tracks(  # noqa: C901
                 _affirmative if track.flags.hearing_impaired else _negative,
                 _affirmative if track.flags.commentary else _negative,
                 _affirmative if track.flags.original_language else _negative,
-                track.name or "",
+                rich.text.Text(track.name or ""),
             ]
 
             table.add_row(
