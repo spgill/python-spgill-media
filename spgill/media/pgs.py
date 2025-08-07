@@ -34,7 +34,6 @@ class SegmentHeader(enum.Enum):
     DecodingTimestamp = enum.auto()
     SegmentType = enum.auto()
     SegmentSize = enum.auto()
-    SegmentData = enum.auto()
 
 
 def _index_slice(n: int) -> slice:
@@ -47,7 +46,6 @@ _segment_header_slicer_map: dict[SegmentHeader, slice] = {
     SegmentHeader.DecodingTimestamp: slice(6, 10),
     SegmentHeader.SegmentType: _index_slice(10),
     SegmentHeader.SegmentSize: slice(11, 13),
-    SegmentHeader.SegmentData: slice(13, None),
 }
 
 
@@ -73,6 +71,14 @@ class BaseSegment:
         return int.from_bytes(cls._get_bytes(data, slicer))
 
     @classmethod
+    def _get_header_bytes(cls, data: bytes, header: SegmentHeader) -> bytes:
+        return cls._get_bytes(data, _segment_header_slicer_map[header])
+
+    @classmethod
+    def _get_header_int(cls, data: bytes, header: SegmentHeader) -> int:
+        return cls._get_int(data, _segment_header_slicer_map[header])
+
+    @classmethod
     def _make_segment(cls, chunk: bytes):
         seg_type = SegmentType(
             cls._get_int(
@@ -81,28 +87,14 @@ class BaseSegment:
         )
         return SegmentTypeClsMap[seg_type](chunk)
 
-    def get_segment_header_bytes(self, header: SegmentHeader) -> bytes:
-        """Return a bytestring from the segment's header block."""
-        return self._get_bytes(self._bytes, _segment_header_slicer_map[header])
-
-    def get_segment_header_int(self, header: SegmentHeader) -> int:
-        """Return an int from the segment's header block."""
-        return self._get_int(self._bytes, _segment_header_slicer_map[header])
-
-    def get_segment_data_bytes(self, slicer: slice) -> bytes:
-        """Return a bytestring from the segment's data block."""
-        return self._get_bytes(self.data, slicer)
-
-    def get_segment_data_int(self, slicer: slice) -> int:
-        """Return an int from the segment's data block."""
-        return self._get_int(self.data, slicer)
-
-    def __init__(self, raw_bytes: bytes):
-        self._bytes: bytes = raw_bytes
+    def __init__(self, chunk: bytes):
+        # Split the chunk into header and data chunks
+        header = chunk[: self._segment_header_length]
+        data = chunk[self._segment_header_length :]
 
         # Validate the magic number before continuing
-        self.magic_number = self.get_segment_header_bytes(
-            SegmentHeader.MagicNumber
+        self.magic_number = self._get_header_bytes(
+            header, SegmentHeader.MagicNumber
         )
         if self.magic_number != b"PG":
             raise InvalidSegmentError
@@ -110,28 +102,27 @@ class BaseSegment:
         # Decode all the other fields in the segment
         # PTS and DTS are divided by 90 to account for the 90kHz accuracy
         self.presentation_timestamp_ms: float = (
-            self.get_segment_header_int(SegmentHeader.PresentationTimestamp)
+            self._get_header_int(header, SegmentHeader.PresentationTimestamp)
             / 90
         )
         """Time of presentation in milliseconds"""
 
         self.decoding_timestamp_ms: float = (
-            self.get_segment_header_int(SegmentHeader.DecodingTimestamp) / 90
+            self._get_header_int(header, SegmentHeader.DecodingTimestamp) / 90
         )
         """Time of decoding in milliseconds (always 0 in practice)."""
 
         self.type: SegmentType = SegmentType(
-            self.get_segment_header_int(SegmentHeader.SegmentType)
+            self._get_header_int(header, SegmentHeader.SegmentType)
         )
-        self.size: int = self.get_segment_header_int(SegmentHeader.SegmentSize)
-        self.data: bytes = self.get_segment_header_bytes(
-            SegmentHeader.SegmentData
+        self.size: int = self._get_header_int(
+            header, SegmentHeader.SegmentSize
         )
 
         # Call the subclass post init method.
-        self._post_init()
+        self._post_init(data)
 
-    def _post_init(self):
+    def _post_init(self, data: bytes):
         """Private method to initialize segment subclasses."""
 
     @staticmethod
@@ -208,24 +199,20 @@ class PresentationCompositionSegment(BaseSegment):
     _composition_chunk_size = 8
     _composition_cropped_chunk_add_size = 8
 
-    def _post_init(self):
-        self.width = self.get_segment_data_int(slice(0, 2))
-        self.height = self.get_segment_data_int(slice(2, 4))
-        self.frame_rate = self.get_segment_data_int(_index_slice(4))
+    def _post_init(self, data: bytes):
+        self.width = self._get_int(data, slice(0, 2))
+        self.height = self._get_int(data, slice(2, 4))
+        self.frame_rate = self._get_int(data, _index_slice(4))
         """Value is always 16"""
-        self.number = self.get_segment_data_int(slice(5, 7))
-        self.state = CompositionState(
-            self.get_segment_data_int(_index_slice(7))
-        )
-        self.palette_update = bool(self.get_segment_data_int(_index_slice(8)))
-        self.palette_id = self.get_segment_data_int(_index_slice(9))
-        self.num_compositions = self.get_segment_data_int(_index_slice(10))
+        self.number = self._get_int(data, slice(5, 7))
+        self.state = CompositionState(self._get_int(data, _index_slice(7)))
+        self.palette_update = bool(self._get_int(data, _index_slice(8)))
+        self.palette_id = self._get_int(data, _index_slice(9))
+        self.num_compositions = self._get_int(data, _index_slice(10))
 
         # The remainder of the segment data is processed as composition objects
         self.compositions: list[CompositionObject] = []
-        composition_data = io.BytesIO(
-            self.get_segment_data_bytes(slice(11, None))
-        )
+        composition_data = io.BytesIO(self._get_bytes(data, slice(11, None)))
         chunk = composition_data.read(self._composition_chunk_size)
         while chunk:
             # Build the composition object using the guaranteed data
@@ -286,12 +273,12 @@ class WindowDefinitionSegment(BaseSegment):
 
     _window_chunk_size = 9
 
-    def _post_init(self):
-        self.num_windows = self.get_segment_data_int(_index_slice(0))
+    def _post_init(self, data: bytes):
+        self.num_windows = self._get_int(data, _index_slice(0))
 
         # The remainder of the segment data contains all of the window definitions
         self.windows: list[WindowObject] = []
-        windows_data = io.BytesIO(self.get_segment_data_bytes(slice(1, None)))
+        windows_data = io.BytesIO(self._get_bytes(data, slice(1, None)))
         chunk = windows_data.read(self._window_chunk_size)
         while chunk:
             self.windows.append(
@@ -329,14 +316,14 @@ class PaletteDefinitionSegment(BaseSegment):
     Class representing a segment used to define a palette for color conversion.
     """
 
-    def _post_init(self):
-        self.palette_id = self.get_segment_data_int(_index_slice(0))
-        self.version = self.get_segment_data_int(_index_slice(1))
+    def _post_init(self, data: bytes):
+        self.palette_id = self._get_int(data, _index_slice(0))
+        self.version = self._get_int(data, _index_slice(1))
 
         # Parse the complete list of palette data
         chunk_size = 5
         self.palette = [Palette(0, 0, 0, 0)] * 256
-        palette_data = self.get_segment_data_bytes(slice(2, None))
+        palette_data = self._get_bytes(data, slice(2, None))
         for i in range(0, len(palette_data), chunk_size):
             chunk = palette_data[i : i + chunk_size]
             idx = self._get_int(chunk, _index_slice(0))
@@ -365,18 +352,16 @@ class ObjectDefinitionSegment(BaseSegment):
     background.
     """
 
-    def _post_init(self):
-        self.id = self.get_segment_data_int(slice(0, 2))
-        self.version = self.get_segment_data_int(_index_slice(2))
-        self.in_sequence = SequenceFlag(
-            self.get_segment_data_int(_index_slice(3))
-        )
+    def _post_init(self, data: bytes):
+        self.id = self._get_int(data, slice(0, 2))
+        self.version = self._get_int(data, _index_slice(2))
+        self.in_sequence = SequenceFlag(self._get_int(data, _index_slice(3)))
 
         # We subtract 4 to account for the width and height bytes
-        self.image_data_len = self.get_segment_data_int(slice(4, 7)) - 4
-        self.image_width = self.get_segment_data_int(slice(7, 9))
-        self.image_height = self.get_segment_data_int(slice(9, 11))
-        self.image_data = self.get_segment_data_bytes(slice(11, None))
+        self.image_data_len = self._get_int(data, slice(4, 7)) - 4
+        self.image_width = self._get_int(data, slice(7, 9))
+        self.image_height = self._get_int(data, slice(9, 11))
+        self.image_data = self._get_bytes(data, slice(11, None))
 
         # Sanity check that the image data matches the reported length
         assert (
