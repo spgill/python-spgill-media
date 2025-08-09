@@ -409,15 +409,15 @@ class DisplaySet:
             [s for s in segments if s.type is SegmentType.WDS],
         )
         self.PDS = typing.cast(
-            list[WindowDefinitionSegment],
+            list[PaletteDefinitionSegment],
             [s for s in segments if s.type is SegmentType.PDS],
         )
         self.ODS = typing.cast(
-            list[WindowDefinitionSegment],
+            list[ObjectDefinitionSegment],
             [s for s in segments if s.type is SegmentType.ODS],
         )
         self.END = typing.cast(
-            PresentationCompositionSegment,
+            EndSegment,
             next(s for s in segments if s.type is SegmentType.END),
         )
 
