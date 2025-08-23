@@ -305,6 +305,8 @@ class WindowDefinitionSegment(BaseSegment):
 class Palette:
     """A single color palette in a PDS segment"""
 
+    ID: int
+
     Y: int
     Cr: int
     Cb: int
@@ -322,16 +324,18 @@ class PaletteDefinitionSegment(BaseSegment):
 
         # Parse the complete list of palette data
         chunk_size = 5
-        self.palette = [Palette(0, 0, 0, 0)] * 256
+        self.palettes: list[Palette] = []
         palette_data = self._get_bytes(data, slice(2, None))
         for i in range(0, len(palette_data), chunk_size):
             chunk = palette_data[i : i + chunk_size]
-            idx = self._get_int(chunk, _index_slice(0))
-            self.palette[idx] = Palette(
-                self._get_int(chunk, _index_slice(1)),
-                self._get_int(chunk, _index_slice(2)),
-                self._get_int(chunk, _index_slice(3)),
-                self._get_int(chunk, _index_slice(4)),
+            self.palettes.append(
+                Palette(
+                    self._get_int(chunk, _index_slice(0)),
+                    self._get_int(chunk, _index_slice(1)),
+                    self._get_int(chunk, _index_slice(2)),
+                    self._get_int(chunk, _index_slice(3)),
+                    self._get_int(chunk, _index_slice(4)),
+                )
             )
 
 
@@ -446,6 +450,23 @@ class DisplaySet:
         """Proxy for the `is_start` property of the contained PCS segment."""
         return self.PCS.is_start
 
+    def get_palettes(self) -> list[Palette]:
+        """
+        Return list of all palette objects defined by any PDS segments, mapped
+        against a 256 entry list by the palette's defined ID.
+        """
+
+        # Start with a list of empty palettes
+        palette_list: list[Palette] = [
+            Palette(i, 0, 0, 0, 0) for i in range(256)
+        ]
+
+        # Iterate through each PDS segment and insert its palettes in the correct index
+        for segment in self.PDS:
+            for palette in segment.palettes:
+                palette_list[palette.ID] = palette
+
+        return palette_list
 
 class PGSReader:
     """A reader class for parsing an entire PGS data stream."""
