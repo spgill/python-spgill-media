@@ -15,6 +15,15 @@ import enum
 import io
 import typing
 
+# vendor imports
+try:
+    import numpy as np
+    from PIL import Image
+
+    _image_ready = True
+except ImportError:
+    _image_ready = False
+
 
 class SegmentType(enum.IntEnum):
     """Enum mapping PGD segment types to their byte identifiers."""
@@ -367,10 +376,10 @@ class ObjectDefinitionSegment(BaseSegment):
         self.image_height = self._get_int(data, slice(9, 11))
         self.image_data = self._get_bytes(data, slice(11, None))
 
-        # Sanity check that the image data matches the reported length
-        assert (
-            len(self.image_data) == self.image_data_len
-        ), "Mismatch between data length field and actual length of image data"
+        # Check that the image data matches the reported length.
+        # This mismatches will no longer throw an exception because it can be
+        # encountered in display sets with multiple ODS segments.
+        self._size_mismatch = len(self.image_data) != self.image_data_len
 
 
 class EndSegment(BaseSegment):
@@ -450,6 +459,51 @@ class DisplaySet:
         """Proxy for the `is_start` property of the contained PCS segment."""
         return self.PCS.is_start
 
+    @classmethod
+    def _decode_rle(cls, ods_bytes: bytes):
+        """Decode the RLE-encoded image data."""
+
+        pixels: list[list[int]] = []
+        line_builder: list[int] = []
+
+        i = 0
+        while i < len(ods_bytes):
+            if ods_bytes[i]:
+                incr = 1
+                color = ods_bytes[i]
+                length = 1
+            else:
+                check = ods_bytes[i + 1]
+                if check == 0:
+                    incr = 2
+                    color = 0
+                    length = 0
+                    pixels.append(line_builder)
+                    line_builder = []
+                elif check < 64:
+                    incr = 2
+                    color = 0
+                    length = check
+                elif check < 128:
+                    incr = 3
+                    color = 0
+                    length = ((check - 64) << 8) + ods_bytes[i + 2]
+                elif check < 192:
+                    incr = 3
+                    color = ods_bytes[i + 2]
+                    length = check - 128
+                else:
+                    incr = 4
+                    color = ods_bytes[i + 3]
+                    length = ((check - 192) << 8) + ods_bytes[i + 2]
+            line_builder.extend([color] * length)
+            i += incr
+
+        if line_builder:
+            print(f"Probably an error; hanging pixels: {line_builder}")
+
+        return pixels
+
     def get_palettes(self) -> list[Palette]:
         """
         Return list of all palette objects defined by any PDS segments, mapped
@@ -467,6 +521,73 @@ class DisplaySet:
                 palette_list[palette.ID] = palette
 
         return palette_list
+
+    def make_image(self) -> "Image.Image":
+        """
+        Parse all the ODS segments present in the display set and render them
+        into an image object. Reasonably performant.
+        """
+
+        # If the requisite libraries aren't available, raise an erro
+        if not _image_ready:
+            raise RuntimeError(
+                "You are missing one or more of the dependencies required for image work; `numpy` and `Pillow`\n"
+                "Make sure you've installed this library with the [image] extra to get those extra dependencies."
+            )
+
+        # Combine all ODS segments into a single byte object
+        image_data: bytes = b""
+        for segment in self.ODS:
+            image_data += segment.image_data
+
+        # Decode the image data and extrapolate the image width from it
+        decoded_image_data = self._decode_rle(image_data)
+        image_width = max(len(row) for row in decoded_image_data)
+
+        palettes = self.get_palettes()
+
+        # Convert the pixel nested list to an array, padding any rows
+        # that aren't wide enough
+        pixel_ar = np.array(
+            [
+                row + ([255] * (image_width - len(row)))
+                for row in decoded_image_data
+            ],
+            dtype=np.uint8,
+        )
+
+        # Map each pixel to its corresponding YCbCr value in a new array and
+        # create a new image from this array, then converting it to RGB colorspace
+        ycbcr_ar = np.array(
+            list(
+                [
+                    (
+                        palettes[n].Y,
+                        palettes[n].Cb,
+                        palettes[n].Cr,
+                    )
+                    for n in row
+                ]
+                for row in pixel_ar
+            ),
+            dtype=np.uint8,
+        )
+        image = Image.fromarray(ycbcr_ar, mode="YCbCr").convert("RGB")
+
+        # Create a similar array for the alpha values, and use it to apply
+        # an alpha mask to the image
+        alpha_ar = np.array(
+            [
+                [palettes[typing.cast(int, n)].Alpha for n in row]
+                for row in pixel_ar
+            ],
+            dtype=np.uint8,
+        )
+        alpha_mask = Image.fromarray(alpha_ar, mode="L")
+        image.putalpha(alpha_mask)
+
+        return image
+
 
 class PGSReader:
     """A reader class for parsing an entire PGS data stream."""
