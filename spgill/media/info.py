@@ -47,6 +47,7 @@ class TrackType(enum.Enum):
     Audio = "audio"
     Subtitle = "subtitle"
     Attachment = "attachment"
+    Data = "data"
 
 
 class TrackFlags(pydantic.BaseModel):
