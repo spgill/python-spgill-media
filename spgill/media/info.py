@@ -1181,16 +1181,25 @@ def _cli_probe(
     path: typing.Annotated[
         pathlib.Path, typer.Argument(help="Path to the media file.")
     ],
-    fields: typing.Annotated[
-        int,
+    deep_probe_indices: typing.Annotated[
+        typing.Optional[list[int]],
         typer.Option(
-            "--fields",
-            "-f",
-            help="The number of fields (packets) to read from the video stream when looking for metadata.",
+            "--deep",
+            "-d",
+            help="List of track indexes on which to perform a frame-level deep probe.",
         ),
-    ] = 1,
+    ] = None,
 ):
+    # print(Container._probe(path))
+    print("PROBE OUTPUT:")
     print(Container._probe(path))
+
+    if deep_probe_indices:
+        container = Container.open(path)
+        for i in deep_probe_indices:
+            container._deep_probe_frames(i)
+        print("\n\nPROBE FRAMES:")
+        print(container.frames)
 
 
 _default_cli_extensions: list[str] = [".mkv", ".mp4", ".m4v", ".wmv", ".avi"]
