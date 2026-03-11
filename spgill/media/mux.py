@@ -776,7 +776,9 @@ class MuxJob:
         for option_type, option_value in options.items():
             yield from self._format_option(option_type, option_value)
 
-    def _generate_command_arguments(self) -> typing.Generator[str, None, None]:
+    def _generate_command_arguments(
+        self, /, stop_after_video_ends: bool = False
+    ) -> typing.Generator[str, None, None]:
         # To being with, we yield argument for the file output
         yield from self._generate_output_container_arguments()
 
@@ -841,7 +843,16 @@ class MuxJob:
         yield "--track-order"
         yield ",".join(stream_order_pairs)
 
-    def run(self, /, warnings_are_fatal=False):
+        if stop_after_video_ends:
+            yield "--stop-after-video-ends"
+
+    def run(
+        self,
+        extra_args: list[str] = [],
+        /,
+        stop_after_video_ends: bool = False,
+        warnings_are_fatal: bool = False,
+    ):
         """
         Run the mux job command. Blocks until the command process exits.
 
@@ -856,7 +867,12 @@ class MuxJob:
 
         tools.run_command_politely(
             _mkvmerge,
-            arguments=list(self._generate_command_arguments()),
+            arguments=list(
+                self._generate_command_arguments(
+                    stop_after_video_ends=stop_after_video_ends
+                )
+            )
+            + extra_args,
             cleanup_paths=[
                 self.output if self.mux_in_place else self.output_temp
             ],
