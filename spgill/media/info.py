@@ -18,9 +18,7 @@ import humanize
 import langcodes
 import pydantic
 import rich.console
-import rich.pretty
 import rich.progress
-import rich.prompt
 import rich.text
 import rich.table
 import sh
@@ -54,11 +52,131 @@ class MediaInfoTrackData(typing_extensions.TypedDict, extra_items=str):
     extra: typing.NotRequired[dict[str, str]]
 
 
-class VideoCodec(enum.StrEnum):
-    HEVC = "V_MPEGH/ISO/HEVC"
+# TODO: replace this with the builtin sentinal when available
+UnknownCodec = typing_extensions.sentinel("UnknownCodec")
+"""Sentinel value indicating A codec that is not known to the media library."""
 
 
-_subtitle_image_codecs: list[str] = ["S_HDMV/PGS", "S_VOBSUB"]
+class VideoCodec(enum.Enum):
+    """Enum representing the high-level video codecs that are recognized"""
+
+    HEVC = enum.auto()
+    AVC = enum.auto()
+    MPEG2 = enum.auto()
+    WMV = enum.auto()
+    VC1 = enum.auto()
+    VP9 = enum.auto()
+    XviD = enum.auto()
+
+
+def _parse_video_codec(
+    track_data: MediaInfoTrackData,
+) -> VideoCodec | UnknownCodec:
+    format = track_data.get("Format", "")
+    format_profile = track_data.get("Format_Profile", None)
+
+    match format:
+        case "HEVC":
+            return VideoCodec.HEVC
+        case "AVC":
+            return VideoCodec.AVC
+        case "MPEG Video":
+            return VideoCodec.MPEG2
+        case "VC-1":
+            if format_profile == "Advanced":
+                return VideoCodec.VC1
+            return VideoCodec.WMV
+        case "VP9":
+            return VideoCodec.VP9
+        case "MPEG-4 Visual":
+            return VideoCodec.XviD
+        case _:
+            return UnknownCodec
+
+
+class AudioCodec(enum.Enum):
+    """Enum representing the high-level audio codecs that are recognized"""
+
+    TrueHD = enum.auto()
+    AC3 = enum.auto()
+    EAC3 = enum.auto()
+    DTS = enum.auto()
+    AAC = enum.auto()
+    PCM = enum.auto()
+    FLAC = enum.auto()
+    MP3 = enum.auto()
+    MP2 = enum.auto()
+    MP1 = enum.auto()
+
+
+def _parse_audio_codec(
+    track_data: MediaInfoTrackData,
+) -> AudioCodec | UnknownCodec:
+    format = track_data.get("Format", "")
+    format_profile = track_data.get("Format_Profile", None)
+
+    match format:
+        case "AC-3":
+            return AudioCodec.AC3
+        case "E-AC-3":
+            return AudioCodec.EAC3
+        case c if c.startswith("MLP FBA"):
+            return AudioCodec.TrueHD
+        case c if c.startswith("DTS"):
+            return AudioCodec.DTS
+        case "FLAC":
+            return AudioCodec.FLAC
+        case "MPEG Audio":
+            if format_profile == "Layer 3":
+                return AudioCodec.MP3
+            if format_profile == "Layer 2":
+                return AudioCodec.MP2
+            return AudioCodec.MP1
+        case "AAC":
+            return AudioCodec.AAC
+        case "PCM":
+            return AudioCodec.PCM
+        case _:
+            return UnknownCodec
+
+
+class SubtitleCodec(enum.Enum):
+    """Enum representing the high-level subtitle codecs that are recognized"""
+
+    PGS = enum.auto()
+    VobSub = enum.auto()
+    SRT = enum.auto()
+    SubStationAlpha = enum.auto()
+    WebVTT = enum.auto()
+
+
+def _parse_sub_codec(
+    track_data: MediaInfoTrackData,
+) -> SubtitleCodec | UnknownCodec:
+    format = track_data.get("Format", "")
+
+    match format:
+        case "PGS":
+            return SubtitleCodec.PGS
+        case "VobSub":
+            return SubtitleCodec.VobSub
+        case "UTF-8":
+            return SubtitleCodec.SRT
+        case "ASS":
+            return SubtitleCodec.SubStationAlpha
+        case "WebVTT":
+            return SubtitleCodec.WebVTT
+        case _:
+            return UnknownCodec
+
+
+type CodecType = VideoCodec | AudioCodec | SubtitleCodec | UnknownCodec
+"""Type representing any possible (known) codec value."""
+
+_subtitle_image_codecs: list[SubtitleCodec] = [
+    SubtitleCodec.PGS,
+    SubtitleCodec.VobSub,
+]
 """List of subtitle codecs that are image-based formats."""
 
 
@@ -153,7 +271,7 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     type_order: int
     lang: str
     name: str
-    codec: str
+    format: str
 
     # Convenience flags
     is_video: bool
@@ -284,7 +402,6 @@ class Track(pydantic.BaseModel):
     format_profile: typing.Optional[str]
     format_level: typing.Optional[str]
     format_tier: typing.Optional[str]
-    codec: str
     duration: float
     bitrate: int
     size: int
@@ -330,7 +447,6 @@ class Track(pydantic.BaseModel):
             format_profile=_parse_str_optional(track_data, "Format_Profile"),
             format_level=_parse_str_optional(track_data, "Format_Level"),
             format_tier=_parse_str_optional(track_data, "Format_Tier"),
-            codec=track_data.get("CodecID", ""),
             duration=float(track_data.get("Duration", 0)),
             bitrate=int(track_data.get("BitRate", 0)),
             size=int(track_data.get("StreamSize", 0)),
@@ -372,6 +488,30 @@ class Track(pydantic.BaseModel):
     def _get_extra(self) -> dict[str, str]:
         """Internal method to fetch `extra` dict from mediainfo data"""
         return self._mediainfo_data.get("extra", {})
+
+    @property
+    def codec(self) -> typing.Optional[CodecType]:
+        """
+        Programmatically convenient value of the track's codec ID.
+
+        Will be an enum member of `VideoCodec`, `AudioCodec`, `SubtitleCodec`,
+        or the sentinel value `UnknownCodec` if the codec doesn't have a
+        recognized mapping.
+        """
+        # We actually use the FORMAT instead of the codec, because the format
+        # is standardized across all container types. Whereas the CodecID field
+        # changes across container types, making it unreliable
+
+        if self.format is None:
+            return None
+
+        match self.type:
+            case TrackType.Video:
+                return _parse_video_codec(self._mediainfo_data)
+            case TrackType.Audio:
+                return _parse_audio_codec(self._mediainfo_data)
+            case TrackType.Subtitle:
+                return _parse_sub_codec(self._mediainfo_data)
 
     @property
     def is_hdr(self) -> bool:
@@ -560,9 +700,9 @@ class Track(pydantic.BaseModel):
         """
         features = (self.format_additional_features or "").split(" ")
         match self.codec:
-            case "A_TRUEHD":
+            case AudioCodec.TrueHD:
                 return "16-ch" in features
-            case "A_EAC3":
+            case AudioCodec.EAC3:
                 return "JOC" in features
         return False
 
@@ -574,7 +714,7 @@ class Track(pydantic.BaseModel):
         Valid only for DTS-HD MA audio tracks.
         """
         features = (self.format_additional_features or "").split(" ")
-        return "X" in features
+        return self.codec is AudioCodec.DTS and "X" in features
 
     @property
     def is_object_surround(self) -> bool:
@@ -592,7 +732,7 @@ class Track(pydantic.BaseModel):
         DTS:X have the same `codec_name` value.
         """
         features = (self.format_additional_features or "").split(" ")
-        return "XLL" in features
+        return self.codec is AudioCodec.DTS and "XLL" in features
 
     @property
     def has_closed_captions(self) -> bool:
@@ -644,7 +784,7 @@ class Track(pydantic.BaseModel):
             "type_order": self.type_order,
             "lang": self.language or "",
             "name": self.name or "",
-            "codec": self.codec or "",
+            "format": self.format or "",
             # Convenience flags
             "is_video": self.type is TrackType.Video,
             "is_audio": self.type is TrackType.Audio,
@@ -656,8 +796,8 @@ class Track(pydantic.BaseModel):
             "is_hi": self.flags.hearing_impaired,
             "is_commentary": self.flags.commentary,
             # Video track flags
-            "is_hevc": "hevc" in (self.codec or "").lower(),
-            "is_avc": "avc" in (self.codec or "").lower(),
+            "is_hevc": self.codec is VideoCodec.HEVC,
+            "is_avc": self.codec is VideoCodec.AVC,
             "is_hdr": self.is_hdr,
             "is_pq10": HDRFormat.PQ10 in self.hdr_formats,
             "is_hdr10": HDRFormat.HDR10 in self.hdr_formats,
@@ -665,13 +805,13 @@ class Track(pydantic.BaseModel):
             "is_dovi": HDRFormat.DolbyVision in self.hdr_formats,
             "is_hdr10plus": HDRFormat.HDR10Plus in self.hdr_formats,
             # Audio track flags
-            "is_aac": "aac" in (self.codec or "").lower(),
-            "is_ac3": "_ac3" in (self.codec or "").lower(),
-            "is_eac3": "eac3" in (self.codec or "").lower(),
-            "is_dts": "dts" in (self.codec or "").lower(),
+            "is_aac": self.codec is AudioCodec.AAC,
+            "is_ac3": self.codec is AudioCodec.AC3,
+            "is_eac3": self.codec is AudioCodec.EAC3,
+            "is_dts": self.codec is AudioCodec.DTS,
             "is_dtshd": self.is_dts_hd_ma,
             "is_dtsx": self.is_dts_x,
-            "is_truehd": "truehd" in (self.codec or "").lower(),
+            "is_truehd": self.codec is AudioCodec.TrueHD,
             "is_atmos": self.is_atmos,
             "is_object": self.is_object_surround,
             # Subtitle track flags
@@ -691,30 +831,11 @@ class Track(pydantic.BaseModel):
         self.container.extract_tracks([(self, path)], fg)
 
 
-# TODO: implement chapter parsing for the new backend
-# class Chapter(pydantic.BaseModel):
-#     """Representation of a single chapter defined within a container."""
-
-#     id: int
-#     start: int
-#     start_time: str
-#     end: int
-#     end_time: str
-
-#     tags: dict[str, str] = pydantic.Field(default_factory=dict)
-
-#     @property
-#     def title(self) -> typing.Optional[str]:
-#         """Convenience property for reading the title tag of this chapter."""
-#         return self.tags.get("title", None)
-
-
 # TODO: improve chapter parsing
 class Chapter(pydantic.BaseModel):
     """A single chapter in a list of chapters."""
 
     time: str
-    language: str
     name: str
 
 
@@ -729,9 +850,8 @@ class ChapterList(pydantic.BaseModel):
         extra = data.get("extra", {})
 
         chapters: list[Chapter] = []
-        for time, name_full in extra.items():
-            [language, name] = name_full.split(":", 1)
-            chapters.append(Chapter(time=time, language=language, name=name))
+        for time, name in extra.items():
+            chapters.append(Chapter(time=time, name=name))
 
         # Finally return the instantiated class
         return cls(chapters=chapters)
@@ -1352,7 +1472,13 @@ def _cli_tracks(  # noqa: C901
 
         # Add a row for each track
         for j, track in enumerate(track_list):
-            codec = track.codec or ""
+            codec = track.format or ""
+            codec: str
+            if track.codec is None or track.codec is UnknownCodec:
+                codec = track.format or ""
+            else:
+                codec = track.codec.name
+
             codec_features = []
 
             # Add suffix to the codec if the audio track has additional
