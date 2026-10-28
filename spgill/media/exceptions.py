@@ -48,6 +48,13 @@ class ContainerCannotBeRead(_ContainerException):
         return f"The file at '{self._container}' was unable to be read by 'ffprobe'. You should inspect the file for errors."
 
 
+class MediainfoLessThanMin(Exception):
+    _min_ver = "23.06"
+
+    def __str__(self) -> str:
+        return f"Your mediainfo does not meet the minimum version of {self._min_ver}"
+
+
 class NotMatroskaContainer(_ContainerException):
     def __str__(self) -> str:
         return f"You tried to invoke a function that can only be used on Matroska containers: {self._container!r}"
