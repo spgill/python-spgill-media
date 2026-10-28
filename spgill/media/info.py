@@ -26,6 +26,7 @@ import rich.table
 import sh
 from spgill.utils.walk import find_files_by_suffix
 import typer
+import typing_extensions
 
 # local imports
 from . import exceptions, tools
@@ -47,11 +48,17 @@ _dovi_profile_pattern = re.compile(r"dvh[e1]\.(\d{2})\.(\d{2})")
 _dovi_layer_pattern = re.compile(r" (BL(?:\+EL)?(?:\+RPU)?),")
 
 
+class MediaInfoTrackData(typing_extensions.TypedDict, extra_items=str):
+    """Dict of key-value pairs of info from MediaInfo on a single track."""
+
+    extra: typing.NotRequired[dict[str, str]]
+
+
 class VideoCodec(enum.StrEnum):
     HEVC = "V_MPEGH/ISO/HEVC"
 
 
-_subtitle_image_codecs: list[str] = ["hdmv_pgs_subtitle", "dvd_subtitle"]
+_subtitle_image_codecs: list[str] = ["S_HDMV/PGS", "S_VOBSUB"]
 """List of subtitle codecs that are image-based formats."""
 
 
@@ -91,7 +98,7 @@ class TrackFlags(pydantic.BaseModel):
     """This track contains commentary."""
 
     @classmethod
-    def _parse(cls, track_info: dict[str, str]) -> "TrackFlags":
+    def _parse(cls, track_info: MediaInfoTrackData) -> "TrackFlags":
         service_flags = track_info.get("ServiceKind", "").split(" / ")
         return cls(
             # Default and forced come straight from the track dict
@@ -186,40 +193,40 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     is_image: bool
 
 
-def _parse_str(data: dict[str, str], key: str, fallback: str = "") -> str:
+def _parse_str(data: MediaInfoTrackData, key: str, fallback: str = "") -> str:
     return data.get(key, fallback)
 
 
 def _parse_str_optional(
-    data: dict[str, str], key: str, fallback: str = ""
+    data: MediaInfoTrackData, key: str, fallback: str = ""
 ) -> typing.Optional[str]:
     return data.get(key, fallback) if key in data else None
 
 
-def _parse_int(data: dict[str, str], key: str, fallback: int = 0) -> int:
+def _parse_int(data: MediaInfoTrackData, key: str, fallback: int = 0) -> int:
     return int(data.get(key, fallback))
 
 
 def _parse_int_optional(
-    data: dict[str, str], key: str, fallback: int = 0
+    data: MediaInfoTrackData, key: str, fallback: int = 0
 ) -> typing.Optional[int]:
     return int(data.get(key, fallback)) if key in data else None
 
 
 def _parse_float(
-    data: dict[str, str], key: str, fallback: float = 0.0
+    data: MediaInfoTrackData, key: str, fallback: float = 0.0
 ) -> float:
     return float(data.get(key, fallback))
 
 
 def _parse_float_optional(
-    data: dict[str, str], key: str, fallback: float = 0.0
+    data: MediaInfoTrackData, key: str, fallback: float = 0.0
 ) -> typing.Optional[float]:
     return float(data.get(key, fallback)) if key in data else None
 
 
 def _parse_frame_rate_fraction(
-    data: dict[str, str],
+    data: MediaInfoTrackData,
 ) -> typing.Optional[tuple[int, int]]:
     if "FrameRate_Num" in data and "FrameRate_Den" in data:
         return (
@@ -229,7 +236,7 @@ def _parse_frame_rate_fraction(
     return None
 
 
-def _parse_hdr_formats(track_data: dict[str, str]) -> set[HDRFormat]:
+def _parse_hdr_formats(track_data: MediaInfoTrackData) -> set[HDRFormat]:
     format_set: set[HDRFormat] = set()
 
     hdr_format_verbose = _parse_str(track_data, "HDR_Format_String")
@@ -296,14 +303,16 @@ class Track(pydantic.BaseModel):
     frame_rate: typing.Optional[float]
     frame_rate_fraction: typing.Optional[tuple[int, int]]
     frame_rate_mode: typing.Optional[str]
+    encoder_name: typing.Optional[str]
+    encoder_settings: typing.Optional[str]
 
     flags: TrackFlags
 
     container: typing.Optional["Container"] = None
-    _mediainfo_data: dict[str, str] = {}
+    _mediainfo_data: MediaInfoTrackData = {}
 
     @classmethod
-    def _parse(cls, track_data: dict[str, str]) -> "Track":
+    def _parse(cls, track_data: MediaInfoTrackData) -> "Track":
         track = cls(
             # common
             unique_id=_parse_int(track_data, "UniqueID"),
@@ -345,6 +354,12 @@ class Track(pydantic.BaseModel):
             frame_rate=_parse_float_optional(track_data, "FrameRate"),
             frame_rate_fraction=_parse_frame_rate_fraction(track_data),
             frame_rate_mode=_parse_str_optional(track_data, "FrameRate_Mode"),
+            encoder_name=_parse_str_optional(
+                track_data, "Encoded_Library_Name"
+            ),
+            encoder_settings=_parse_str_optional(
+                track_data, "Encoded_Library_Settings"
+            ),
         )
 
         track._mediainfo_data = track_data
@@ -353,6 +368,10 @@ class Track(pydantic.BaseModel):
     def __hash__(self) -> int:
         assert self.container is not None
         return self.container.format.unique_id + self.index
+
+    def _get_extra(self) -> dict[str, str]:
+        """Internal method to fetch `extra` dict from mediainfo data"""
+        return self._mediainfo_data.get("extra", {})
 
     @property
     def is_hdr(self) -> bool:
@@ -690,6 +709,34 @@ class Track(pydantic.BaseModel):
 #         return self.tags.get("title", None)
 
 
+# TODO: improve chapter parsing
+class Chapter(pydantic.BaseModel):
+    """A single chapter in a list of chapters."""
+
+    time: str
+    language: str
+    name: str
+
+
+class ChapterList(pydantic.BaseModel):
+    """Representation of a single chapter listing in the container."""
+
+    chapters: list[Chapter]
+
+    @classmethod
+    def _parse(cls, data: MediaInfoTrackData):
+        # Chapters are stored as entries in the extra dict
+        extra = data.get("extra", {})
+
+        chapters: list[Chapter] = []
+        for time, name_full in extra.items():
+            [language, name] = name_full.split(":", 1)
+            chapters.append(Chapter(time=time, language=language, name=name))
+
+        # Finally return the instantiated class
+        return cls(chapters=chapters)
+
+
 class ContainerFrameData(pydantic.BaseModel):
     track_index: int = pydantic.Field(alias="stream_index", default=0)
 
@@ -708,6 +755,7 @@ class Container(pydantic.BaseModel):
     _path: typing.Optional[pathlib.Path] = None
 
     format: Track
+    chapters: list[ChapterList]
 
     tracks: list[Track]
 
@@ -839,24 +887,37 @@ class Container(pydantic.BaseModel):
 
         # Begin iterating through the tracks in the file
         format_info: typing.Optional[Track] = None
+        chapters: list[ChapterList] = []
         track_list: list[Track] = []
-        for track_info in raw_json.get("media", {}).get("track", []):
-            track_type_str = track_info.get("@type", None)
-            if track_type_str is None or track_type_str == "Menu":
-                continue
+        trade_data_list: list[MediaInfoTrackData] = raw_json.get(
+            "media", {}
+        ).get("track", [])
+        for track_data in trade_data_list:
+            track_type_str = track_data.get("@type", None)
 
-            # Separate out the general track
-            if track_type_str == "General":
-                format_info = Track._parse(track_info)
-                continue
+            match track_type_str:
+                # Intercept "General" track type which contains container format
+                case "General":
+                    format_info = Track._parse(track_data)
 
-            track_list.append(Track._parse(track_info))
+                # Set the chapters track aside
+                case "Menu":
+                    chapters.append(ChapterList._parse(track_data))
+
+                # Case to handle the standard video/audio/subtitle types
+                case value if value in TrackType._value2member_map_:
+                    track_list.append(Track._parse(track_data))
+
+                # Default case ignores all other types (attachments, etc)
+                case _:
+                    continue
 
         assert format_info is not None
 
         # Create the new container instance
         container = cls(
             format=format_info,
+            chapters=chapters,
             tracks=track_list,
         )
         container._path = path
@@ -1159,6 +1220,24 @@ class Container(pydantic.BaseModel):
                 for side_data in frame.side_data_list:
                     if side_data.get("side_data_type", "") == data_type.value:
                         yield side_data
+
+    @property
+    def title(self) -> typing.Optional[str]:
+        """String title stored in the container"""
+        return self.format._mediainfo_data.get("Title", None)
+
+    @property
+    def attachments(self) -> list[str]:
+        """
+        List of attachment names in the container.
+
+        If none are present, an empty list will be returned.
+        """
+        if attachments_str := self.format._get_extra().get(
+            "Attachments", None
+        ):
+            return attachments_str.split(" / ")
+        return []
 
 
 _cli_app = typer.Typer()
