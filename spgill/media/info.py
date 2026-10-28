@@ -7,14 +7,18 @@ but some operations can only be performed on Matroska files.
 
 # stdlib imports
 import enum
+import json
+import packaging.version
 import pathlib
 import re
 import typing
 
 # vendor imports
 import humanize
+import langcodes
 import pydantic
 import rich.console
+import rich.pretty
 import rich.progress
 import rich.prompt
 import rich.text
@@ -26,6 +30,10 @@ import typer
 # local imports
 from . import exceptions, tools
 
+_mediainfo = sh.Command("mediainfo")
+_mediainfo_min_ver = packaging.version.parse(
+    exceptions.MediainfoLessThanMin._min_ver
+)
 _ffprobe = sh.Command("ffprobe")
 _mkvextract = sh.Command("mkvextract")
 
@@ -35,6 +43,13 @@ _comma_delim_nos_pattern = re.compile(
 )
 _index_with_type_pattern = re.compile(r"^([vas]?)(.*?)$")
 
+_dovi_profile_pattern = re.compile(r"dvh[e1]\.(\d{2})\.(\d{2})")
+_dovi_layer_pattern = re.compile(r" (BL(?:\+EL)?(?:\+RPU)?),")
+
+
+class VideoCodec(enum.StrEnum):
+    HEVC = "V_MPEGH/ISO/HEVC"
+
 
 _subtitle_image_codecs: list[str] = ["hdmv_pgs_subtitle", "dvd_subtitle"]
 """List of subtitle codecs that are image-based formats."""
@@ -43,11 +58,12 @@ _subtitle_image_codecs: list[str] = ["hdmv_pgs_subtitle", "dvd_subtitle"]
 class TrackType(enum.Enum):
     """Base types of a track."""
 
-    Video = "video"
-    Audio = "audio"
-    Subtitle = "subtitle"
-    Attachment = "attachment"
-    Data = "data"
+    General = "General"
+    """Used internally for container format information"""
+
+    Video = "Video"
+    Audio = "Audio"
+    Subtitle = "Text"
 
 
 class TrackFlags(pydantic.BaseModel):
@@ -65,17 +81,29 @@ class TrackFlags(pydantic.BaseModel):
     visual_impaired: bool
     """This track is suitable for users with visual impairments."""
 
-    text_descriptions: bool = pydantic.Field(alias="descriptions")
+    text_descriptions: bool
     """This track contains textual descriptions of video content."""
 
-    original_language: bool = pydantic.Field(alias="original")
+    original_language: bool
     """This track is in the content's original language (not a translation)."""
 
-    commentary: bool = pydantic.Field(alias="comment")
+    commentary: bool
     """This track contains commentary."""
 
-    attached_pic: bool
-    """This field is used by ffprobe to indicated an image attachment."""
+    @classmethod
+    def _parse(cls, track_info: dict[str, str]) -> "TrackFlags":
+        service_flags = track_info.get("ServiceKind", "").split(" / ")
+        return cls(
+            # Default and forced come straight from the track dict
+            default=track_info.get("Default", None) == "Yes",
+            forced=track_info.get("Forced", None) == "Yes",
+            # The rest come from parsing the service kind field
+            hearing_impaired="HI" in service_flags,
+            visual_impaired="VI" in service_flags,
+            text_descriptions="TD" in service_flags,
+            original_language="O" in service_flags,
+            commentary="C" in service_flags,
+        )
 
 
 class SideDataType(enum.Enum):
@@ -109,21 +137,13 @@ class DolbyVisionLayer(enum.Enum):
     RPU = "RPU"
 
 
-class FieldOrder(enum.Enum):
-    Progressive = "progressive"
-    TopCodedAndDisplayedFirst = "tt"
-    BottomCodedAndDisplayedFirst = "bb"
-    TopCodedBottomDisplayedFirst = "tb"
-    BottomCodedTopDisplayedFirst = "bt"
-
-
 class TrackSelectorValues(typing.TypedDict, total=True):
     """Selector flags used for simple selection of tracks from a container (specifically from the CLI)."""
 
     # Convenience values
     track: "Track"
     index: int
-    type_index: int
+    type_order: int
     lang: str
     name: str
     codec: str
@@ -166,185 +186,178 @@ class TrackSelectorValues(typing.TypedDict, total=True):
     is_image: bool
 
 
-class TrackTags(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="allow")
+def _parse_str(data: dict[str, str], key: str, fallback: str = "") -> str:
+    return data.get(key, fallback)
 
-    # Important tags
-    name: typing.Optional[str] = pydantic.Field(
-        validation_alias=pydantic.AliasChoices("title", "TITLE"), default=None
-    )
-    language: typing.Optional[str] = pydantic.Field(
-        validation_alias=pydantic.AliasChoices("language", "LANGUAGE"),
-        default=None,
+
+def _parse_str_optional(
+    data: dict[str, str], key: str, fallback: str = ""
+) -> typing.Optional[str]:
+    return data.get(key, fallback) if key in data else None
+
+
+def _parse_int(data: dict[str, str], key: str, fallback: int = 0) -> int:
+    return int(data.get(key, fallback))
+
+
+def _parse_int_optional(
+    data: dict[str, str], key: str, fallback: int = 0
+) -> typing.Optional[int]:
+    return int(data.get(key, fallback)) if key in data else None
+
+
+def _parse_float(
+    data: dict[str, str], key: str, fallback: float = 0.0
+) -> float:
+    return float(data.get(key, fallback))
+
+
+def _parse_float_optional(
+    data: dict[str, str], key: str, fallback: float = 0.0
+) -> typing.Optional[float]:
+    return float(data.get(key, fallback)) if key in data else None
+
+
+def _parse_frame_rate_fraction(
+    data: dict[str, str],
+) -> typing.Optional[tuple[int, int]]:
+    if "FrameRate_Num" in data and "FrameRate_Den" in data:
+        return (
+            _parse_int(data, "FrameRate_Num"),
+            _parse_int(data, "FrameRate_Den"),
+        )
+    return None
+
+
+def _parse_hdr_formats(track_data: dict[str, str]) -> set[HDRFormat]:
+    format_set: set[HDRFormat] = set()
+
+    hdr_format_verbose = _parse_str(track_data, "HDR_Format_String")
+    transfer_characteristics = _parse_str(
+        track_data, "transfer_characteristics"
     )
 
-    # Other meta tags. I think these only work on MKV files written with semi-recent tools.
-    bps: typing.Optional[int] = pydantic.Field(alias="BPS", default=None)
-    duration: typing.Optional[str] = pydantic.Field(
-        alias="DURATION", default=None
-    )
-    number_of_frames: typing.Optional[int] = pydantic.Field(
-        alias="NUMBER_OF_FRAMES", default=None
-    )
-    number_of_bytes: typing.Optional[int] = pydantic.Field(
-        alias="NUMBER_OF_BYTES", default=None
-    )
+    if "Dolby Vision" in hdr_format_verbose:
+        format_set.add(HDRFormat.DolbyVision)
 
-    @property
-    def extras(self) -> dict[str, typing.Any]:
-        """A dictionary of extra tags that are not explicitly typed in `TrackTags`"""
-        return self.__pydantic_extra__ or {}
+    # HDR10 is identified by SMPTE ST 2086
+    if "SMPTE ST 2086" in hdr_format_verbose:
+        format_set.add(HDRFormat.HDR10)
+
+    # HDR10+ is identified by SMPTE ST 2094 App 4, and implies HDR10
+    if "SMPTE ST 2094 App 4" in hdr_format_verbose:
+        format_set.add(HDRFormat.HDR10)
+        format_set.add(HDRFormat.HDR10Plus)
+
+    # HLF is identified by the HLF transfer characteristic
+    if transfer_characteristics == "HLG":
+        format_set.add(HDRFormat.HLG)
+
+    # PQ10 is PQ transfer characteristic without the HDR10 metadata
+    if (
+        HDRFormat.HDR10 not in format_set
+        and HDRFormat.DolbyVision not in format_set
+        and transfer_characteristics == "PQ"
+    ):
+        format_set.add(HDRFormat.PQ10)
+
+    return format_set
 
 
 class Track(pydantic.BaseModel):
     """Representation of a single track within a container. Contains all relevant attributes therein."""
 
-    flags: TrackFlags = pydantic.Field(alias="disposition")
-
-    # Generic fields
+    unique_id: int
+    type: TrackType
+    type_order: int
     index: int
-    type: TrackType = pydantic.Field(alias="codec_type")
-    start_time: typing.Optional[str] = None
-    codec_name: typing.Optional[str] = None
-    codec_long_name: typing.Optional[str] = None
-    duration: typing.Optional[str] = None
-    extradata_size: typing.Optional[int] = None
+    format: typing.Optional[str]
+    format_commercial: typing.Optional[str]
+    format_additional_features: typing.Optional[str]
+    format_profile: typing.Optional[str]
+    format_level: typing.Optional[str]
+    format_tier: typing.Optional[str]
+    codec: str
+    duration: float
+    bitrate: int
+    size: int
+    name: typing.Optional[str]
+    language: typing.Optional[str]
+    language_rich: typing.Any
+    width: typing.Optional[int]
+    height: typing.Optional[int]
+    colorspace: typing.Optional[str]
+    chroma_subsampling: typing.Optional[str]
+    bit_depth: typing.Optional[int]
+    hdr_formats: set[HDRFormat]
+    channels: typing.Optional[int]
+    scan_type: typing.Optional[str]
+    scan_order: typing.Optional[str]
+    frame_rate: typing.Optional[float]
+    frame_rate_fraction: typing.Optional[tuple[int, int]]
+    frame_rate_mode: typing.Optional[str]
 
-    # Video fields
-    width: typing.Optional[int] = None
-    height: typing.Optional[int] = None
-    coded_width: typing.Optional[int] = None
-    coded_height: typing.Optional[int] = None
-    display_aspect_ratio: typing.Optional[str] = None
-    pix_fmt: typing.Optional[str] = None
-    level: typing.Optional[int] = None
-    field_order: typing.Optional[FieldOrder] = None
-    avg_frame_rate: typing.Optional[str] = None
-    color_range: typing.Optional[str] = None
-    color_space: typing.Optional[str] = None
-    color_transfer: typing.Optional[str] = None
-    color_primaries: typing.Optional[str] = None
-    chroma_location: typing.Optional[str] = None
-    closed_captions: typing.Optional[bool] = None
-
-    # Audio fields
-    profile: typing.Optional[str] = None
-    sample_fmt: typing.Optional[str] = None
-    sample_rate: typing.Optional[str] = None
-    channels: typing.Optional[int] = None
-    channel_layout: typing.Optional[str] = None
-    bits_per_raw_sample: typing.Optional[str] = None
-
-    tags: TrackTags = pydantic.Field(default_factory=TrackTags)
-    side_data_list: list[dict[str, typing.Any]] = pydantic.Field(
-        default_factory=list
-    )
+    flags: TrackFlags
 
     container: typing.Optional["Container"] = None
-    """Field linked to the parent track container object."""
+    _mediainfo_data: dict[str, str] = {}
+
+    @classmethod
+    def _parse(cls, track_data: dict[str, str]) -> "Track":
+        track = cls(
+            # common
+            unique_id=_parse_int(track_data, "UniqueID"),
+            type=TrackType(track_data.get("@type", None)),
+            type_order=_parse_int(track_data, "@typeorder", 1) - 1,
+            index=int(track_data.get("ID", 0)) - 1,
+            format=_parse_str_optional(track_data, "Format"),
+            format_commercial=_parse_str_optional(
+                track_data, "Format_Commercial"
+            )
+            or _parse_str_optional(track_data, "Format_Commercial_IfAny"),
+            format_additional_features=_parse_str_optional(
+                track_data, "Format_AdditionalFeatures"
+            ),
+            format_profile=_parse_str_optional(track_data, "Format_Profile"),
+            format_level=_parse_str_optional(track_data, "Format_Level"),
+            format_tier=_parse_str_optional(track_data, "Format_Tier"),
+            codec=track_data.get("CodecID", ""),
+            duration=float(track_data.get("Duration", 0)),
+            bitrate=int(track_data.get("BitRate", 0)),
+            size=int(track_data.get("StreamSize", 0)),
+            name=_parse_str_optional(track_data, "Title"),
+            language=_parse_str(track_data, "Language", "und"),
+            language_rich=langcodes.get(
+                _parse_str(track_data, "Language", "und")
+            ),
+            flags=TrackFlags._parse(track_data),
+            width=_parse_int_optional(track_data, "Width"),
+            height=_parse_int_optional(track_data, "Height"),
+            colorspace=_parse_str_optional(track_data, "ColorSpace"),
+            chroma_subsampling=_parse_str_optional(
+                track_data, "ChromaSubsampling"
+            ),
+            bit_depth=_parse_int_optional(track_data, "BitDepth"),
+            hdr_formats=_parse_hdr_formats(track_data),
+            channels=_parse_int_optional(track_data, "Channels"),
+            scan_type=_parse_str_optional(track_data, "ScanType"),
+            scan_order=_parse_str_optional(track_data, "ScanOrder"),
+            frame_rate=_parse_float_optional(track_data, "FrameRate"),
+            frame_rate_fraction=_parse_frame_rate_fraction(track_data),
+            frame_rate_mode=_parse_str_optional(track_data, "FrameRate_Mode"),
+        )
+
+        track._mediainfo_data = track_data
+        return track
 
     def __hash__(self) -> int:
-        assert self.container
-        return hash((self.container.format.filename, self.index))
-
-    # Properties
-    @property
-    def language(self) -> typing.Optional[str]:
-        """Convenience property for reading the language tag of this track."""
-        return self.tags.language
-
-    @property
-    def name(self) -> typing.Optional[str]:
-        """Convenience property for reading the name tag of this track."""
-        return self.tags.name
-
-    @property
-    def type_index(self) -> int:
-        """
-        Property to get this track's index _in relation_ to other tracks
-        of the same type.
-
-        Requires that this `Track` instance is bound to a parent `Container`
-        instance. This happens automatically if you use the `Container.open()`
-        class method, but if you manually instantiate a `Track` instance you
-        may have issues.
-        """
-        if self.container is None:
-            raise exceptions.TrackNoParentContainer(self)
-
-        i: int = 0
-        for track in self.container.tracks:
-            if track == self:
-                break
-            if track.type == self.type:
-                i += 1
-        return i
-
-    @property
-    def hdr_formats(self) -> set[HDRFormat]:
-        """
-        Property containing a set of the HDR formats detected in the track.
-
-        Only works on video tracks, and requires a bound `Container` instance.
-
-        Warning: The first access of this property will have a slight delay as the
-        container file is probed for information. This result will be cached and returned
-        on further access attempts.
-        """
-        # HDR is (obv) only for video tracks. If this method is invoked on a non-
-        # video track we will just return an empty set instead of throwing an
-        # exception. This is just a cleaner operation in the end.
-        if self.type is not TrackType.Video:
-            return set()
-
-        if self.container is None:
-            raise exceptions.TrackNoParentContainer(self)
-
-        formats: set[HDRFormat] = set()
-
-        # Detecting HDR10 and HLG is just a matter of reading the video track's
-        # color transfer attribute
-        if self.color_transfer == "smpte2084":
-            if self.hdr10_metadata is None:
-                formats.add(HDRFormat.PQ10)
-            else:
-                formats.add(HDRFormat.HDR10)
-        elif self.color_transfer == "arib-std-b67":
-            formats.add(HDRFormat.HLG)
-
-        # Dolby vision and HDR10+ can be detected via the frame side data
-        if bool(
-            list(
-                self.container.get_frame_side_data(
-                    self.index, SideDataType.DolbyVisionRPU
-                )
-            )
-        ):
-            formats.add(HDRFormat.DolbyVision)
-
-        if bool(
-            list(
-                self.container.get_frame_side_data(
-                    self.index, SideDataType.HDRDynamicMeta
-                )
-            )
-        ):
-            formats.add(HDRFormat.HDR10Plus)
-
-        # Alternate method for detecting DoVi config in the track's side data
-        if bool(
-            list(self.get_track_side_data(SideDataType.DolbyVisionConfig))
-        ):
-            formats.add(HDRFormat.DolbyVision)
-
-        return formats
+        assert self.container is not None
+        return self.container.format.unique_id + self.index
 
     @property
     def is_hdr(self) -> bool:
         """
         Simple boolean property indicating if the track is encoded in an HDR format.
-
-        See `Track.hdr_formats` for warnings on access delay time.
         """
         return bool(self.hdr_formats)
 
@@ -364,12 +377,12 @@ class Track(pydantic.BaseModel):
         # metadata and the content light level metadata
         found_display_meta = list(
             self.container.get_frame_side_data(
-                self.index, SideDataType.MasterDisplayMeta
+                self, SideDataType.MasterDisplayMeta
             )
         )
         found_light_level = list(
             self.container.get_frame_side_data(
-                self.index, SideDataType.ContentLightMeta
+                self, SideDataType.ContentLightMeta
             )
         )
 
@@ -469,37 +482,29 @@ class Track(pydantic.BaseModel):
         max_average_light = light_level_metadata.get("max_average", 0)
         return f"{max_content_light},{max_average_light}"
 
-    @property
-    def dovi_configuration(self) -> dict[str, typing.Any]:
-        """
-        Return the Dolby Vision configuration for the track, or an empty dict if
-        none exists (or non-video track).
-        """
-        found = list(self.get_track_side_data(SideDataType.DolbyVisionConfig))
-        return found[0] if found else {}
+    def _parse_dovi_profile(self) -> typing.Optional[tuple[int, int]]:
+        """Internal method to parse the DoVi profile string to tuple."""
+        if HDRFormat.DolbyVision in self.hdr_formats:
+            hdr_format_verbose = _parse_str(
+                self._mediainfo_data, "HDR_Format_String"
+            )
+            if match := _dovi_profile_pattern.search(hdr_format_verbose):
+                return (int(match.group(1)), int(match.group(2)))
+        return None
 
     @property
     def dovi_profile(self) -> typing.Optional[int]:
         """Return the Dolby Vision profile of the track."""
-        return self.dovi_configuration.get("dv_profile", None)
+        if parsed := self._parse_dovi_profile():
+            return parsed[0]
+        return None
 
     @property
     def dovi_level(self) -> typing.Optional[int]:
         """Return the Dolby Vision level of the track."""
-        return self.dovi_configuration.get("dv_level", None)
-
-    @property
-    def dovi_compatibility_id(self) -> typing.Optional[int]:
-        """
-        Return the Dolby Vision signal compatibility ID of the track.
-
-        More information on these compatibility IDs can be found in the
-        following Dolby documentation (approx. Page 10):
-        https://professionalsupport.dolby.com/s/article/What-is-Dolby-Vision-Profile
-        """
-        return self.dovi_configuration.get(
-            "dv_bl_signal_compatibility_id", None
-        )
+        if parsed := self._parse_dovi_profile():
+            return parsed[1]
+        return None
 
     @property
     def dovi_layers(self) -> set[DolbyVisionLayer]:
@@ -510,13 +515,20 @@ class Track(pydantic.BaseModel):
         On a non-DoVi track or a non-video track, an empty set will be returned.
         """
         layers: set[DolbyVisionLayer] = set()
-        config = self.dovi_configuration
-        if config.get("bl_present_flag", 0):
-            layers.add(DolbyVisionLayer.BaseLayer)
-        if config.get("el_present_flag", 0):
-            layers.add(DolbyVisionLayer.EnhancementLayer)
-        if config.get("rpu_present_flag", 0):
-            layers.add(DolbyVisionLayer.RPU)
+
+        if HDRFormat.DolbyVision in self.hdr_formats:
+            hdr_format_verbose = _parse_str(
+                self._mediainfo_data, "HDR_Format_String"
+            )
+            if match := _dovi_layer_pattern.search(hdr_format_verbose):
+                layer_string = match.group(1)
+                if "BL" in layer_string:
+                    layers.add(DolbyVisionLayer.BaseLayer)
+                if "EL" in layer_string:
+                    layers.add(DolbyVisionLayer.EnhancementLayer)
+                if "RPU" in layer_string:
+                    layers.add(DolbyVisionLayer.RPU)
+
         return layers
 
     @property
@@ -527,7 +539,13 @@ class Track(pydantic.BaseModel):
 
         Valid for E-AC-3 and TrueHD audio tracks.
         """
-        return "atmos" in (self.profile or "").lower()
+        features = (self.format_additional_features or "").split(" ")
+        match self.codec:
+            case "A_TRUEHD":
+                return "16-ch" in features
+            case "A_EAC3":
+                return "JOC" in features
+        return False
 
     @property
     def is_dts_x(self) -> bool:
@@ -536,7 +554,8 @@ class Track(pydantic.BaseModel):
 
         Valid only for DTS-HD MA audio tracks.
         """
-        return "dts:x" in (self.profile or "").lower()
+        features = (self.format_additional_features or "").split(" ")
+        return "X" in features
 
     @property
     def is_object_surround(self) -> bool:
@@ -553,15 +572,13 @@ class Track(pydantic.BaseModel):
         This is necessary because all DTS tracks from OG all the way up to
         DTS:X have the same `codec_name` value.
         """
-        return "dts-hd" in (self.profile or "").lower()
+        features = (self.format_additional_features or "").split(" ")
+        return "XLL" in features
 
     @property
     def has_closed_captions(self) -> bool:
         """
         Returns `True` if the video track contains embedded closed captions.
-
-        Unforunately, there's no way to know how many closed caption tracks
-        and their language without additional tooling.
         """
         if self.type is not TrackType.Video:
             return False
@@ -569,35 +586,26 @@ class Track(pydantic.BaseModel):
         if self.container is None:
             raise exceptions.TrackNoParentContainer(self)
 
-        if self.container:
-            return bool(self.closed_captions) or bool(
-                list(
-                    self.container.get_frame_side_data(
-                        self.index, SideDataType.ClosedCaptions
-                    )
+        return bool(
+            list(
+                self.container.get_frame_side_data(
+                    self, SideDataType.ClosedCaptions
                 )
             )
-        return bool(self.closed_captions)
+        )
 
     @property
     def is_interlaced(self) -> bool:
         """Returns `True` if the video track is interlaced."""
-        return (
-            self.type is TrackType.Video
-            and self.field_order is not None
-            and self.field_order is not FieldOrder.Progressive
-        )
+        return self.scan_type == "Interlaced"
 
     @property
     def is_progressive(self) -> bool:
         """Returns `True` if the video track is progressively scanned."""
-        return self.type is TrackType.Video and (
-            self.field_order is None
-            or self.field_order is FieldOrder.Progressive
-        )
+        return not self.is_interlaced
 
     def __repr__(self) -> str:
-        attributes = ["index", "type", "codec_name", "name", "language"]
+        attributes = ["index", "type", "codec", "name", "language"]
         formatted_attributes: list[str] = []
         for name in attributes:
             formatted_attributes.append(f"{name}={getattr(self, name)!r}")
@@ -614,10 +622,10 @@ class Track(pydantic.BaseModel):
             # Convenience values
             "track": self,
             "index": self.index,
-            "type_index": self.type_index,
+            "type_order": self.type_order,
             "lang": self.language or "",
             "name": self.name or "",
-            "codec": self.codec_name or "",
+            "codec": self.codec or "",
             # Convenience flags
             "is_video": self.type is TrackType.Video,
             "is_audio": self.type is TrackType.Audio,
@@ -629,8 +637,8 @@ class Track(pydantic.BaseModel):
             "is_hi": self.flags.hearing_impaired,
             "is_commentary": self.flags.commentary,
             # Video track flags
-            "is_hevc": "hevc" in (self.codec_name or "").lower(),
-            "is_avc": "avc" in (self.codec_name or "").lower(),
+            "is_hevc": "hevc" in (self.codec or "").lower(),
+            "is_avc": "avc" in (self.codec or "").lower(),
             "is_hdr": self.is_hdr,
             "is_pq10": HDRFormat.PQ10 in self.hdr_formats,
             "is_hdr10": HDRFormat.HDR10 in self.hdr_formats,
@@ -638,23 +646,23 @@ class Track(pydantic.BaseModel):
             "is_dovi": HDRFormat.DolbyVision in self.hdr_formats,
             "is_hdr10plus": HDRFormat.HDR10Plus in self.hdr_formats,
             # Audio track flags
-            "is_aac": "aac" in (self.codec_name or "").lower(),
-            "is_ac3": "_ac3" in (self.codec_name or "").lower(),
-            "is_eac3": "eac3" in (self.codec_name or "").lower(),
-            "is_dts": "dts" in (self.codec_name or "").lower(),
+            "is_aac": "aac" in (self.codec or "").lower(),
+            "is_ac3": "_ac3" in (self.codec or "").lower(),
+            "is_eac3": "eac3" in (self.codec or "").lower(),
+            "is_dts": "dts" in (self.codec or "").lower(),
             "is_dtshd": self.is_dts_hd_ma,
             "is_dtsx": self.is_dts_x,
-            "is_truehd": "truehd" in (self.codec_name or "").lower(),
+            "is_truehd": "truehd" in (self.codec or "").lower(),
             "is_atmos": self.is_atmos,
             "is_object": self.is_object_surround,
             # Subtitle track flags
-            "is_image": self.codec_name in _subtitle_image_codecs,
-            "is_text": self.codec_name not in _subtitle_image_codecs,
+            "is_image": self.codec in _subtitle_image_codecs,
+            "is_text": self.codec not in _subtitle_image_codecs,
         }
 
     def extract(self, path: pathlib.Path, fg: bool = True):
         """
-        Extract this track to a new file.
+        Extract this track to a separate file.
 
         *ONLY WORKS WITH MKV CONTAINERS*
         """
@@ -663,47 +671,23 @@ class Track(pydantic.BaseModel):
 
         self.container.extract_tracks([(self, path)], fg)
 
-    def get_track_side_data(
-        self, data_type: SideDataType
-    ) -> typing.Generator[dict[str, typing.Any], None, None]:
-        """For this track, yield all side data entries that match the given type."""
-        for side_data in self.side_data_list:
-            if side_data.get("side_data_type", "") == data_type.value:
-                yield side_data
 
+# TODO: implement chapter parsing for the new backend
+# class Chapter(pydantic.BaseModel):
+#     """Representation of a single chapter defined within a container."""
 
-class Chapter(pydantic.BaseModel):
-    """Representation of a single chapter defined within a container."""
+#     id: int
+#     start: int
+#     start_time: str
+#     end: int
+#     end_time: str
 
-    id: int
-    start: int
-    start_time: str
-    end: int
-    end_time: str
+#     tags: dict[str, str] = pydantic.Field(default_factory=dict)
 
-    tags: dict[str, str] = pydantic.Field(default_factory=dict)
-
-    @property
-    def title(self) -> typing.Optional[str]:
-        """Convenience property for reading the title tag of this chapter."""
-        return self.tags.get("title", None)
-
-
-class ContainerFormat(pydantic.BaseModel):
-    """Format metadata of a container"""
-
-    filename: pathlib.Path  # Cast from str
-    tracks_count: int = pydantic.Field(alias="nb_streams")
-    # programs_count: int = pydantic.Field(alias="nb_programs")  # Still not sure what "programs" are
-    format_name: str
-    format_long_name: str
-    start_time: typing.Optional[str] = None
-    duration: typing.Optional[str] = None
-    size: int  # Cast from str
-    bit_rate: typing.Optional[int] = None  # Cast from str
-    probe_score: int
-
-    tags: dict[str, str] = pydantic.Field(default_factory=dict)
+#     @property
+#     def title(self) -> typing.Optional[str]:
+#         """Convenience property for reading the title tag of this chapter."""
+#         return self.tags.get("title", None)
 
 
 class ContainerFrameData(pydantic.BaseModel):
@@ -715,45 +699,34 @@ class ContainerFrameData(pydantic.BaseModel):
 
 
 class Container(pydantic.BaseModel):
-    """Do NOT instantiate this class manually, use the `Container.open()` class method instead."""
-
-    format: ContainerFormat
-    tracks: list[Track] = pydantic.Field(
-        alias="streams", default_factory=list
-    )  # We alias this to "streams", because we prefer mkv terminology
-    chapters: list[Chapter] = pydantic.Field(default_factory=list)
-
-    frames: list[ContainerFrameData] = pydantic.Field(default_factory=list)
     """
-    List of frame data captured from `ffprobe`. Only useful for identifying
-    frame side data.
+    Object representing a single media container containing one or many individual tracks.
 
-    Not guaranteed to be in chronological order because probes of this data
-    are performed on-demand.
+    Do _NOT_ instantiate this class manually, use the `Container.open()` class method instead.
     """
 
-    attachments: list[Track] = pydantic.Field(default_factory=list)
-    """List of container attachment files."""
+    _path: typing.Optional[pathlib.Path] = None
+
+    format: Track
+
+    tracks: list[Track]
 
     def __hash__(self) -> int:
-        return hash((self.format.filename.absolute()))
+        return self.format.unique_id
 
     @classmethod
     def sort_tracks_by_type(
         cls, tracks: list[Track]
     ) -> dict[TrackType, list[Track]]:
-        """Given a list of tracks, return them sorted by their type attribute."""
-        groups: dict[TrackType, list[Track]] = {
-            TrackType.Video: [],
-            TrackType.Audio: [],
-            TrackType.Subtitle: [],
-            TrackType.Attachment: [],
+        """Return a mapping of the tracks by their assigned type."""
+        return {
+            track_type: [track for track in tracks if track.type is track_type]
+            for track_type in [
+                TrackType.Video,
+                TrackType.Audio,
+                TrackType.Subtitle,
+            ]
         }
-
-        for track in tracks:
-            groups[track.type].append(track)
-
-        return groups
 
     @classmethod
     def sort_tracks_by_language(
@@ -794,42 +767,24 @@ class Container(pydantic.BaseModel):
 
         return language_groups
 
-    @classmethod
-    def _probe(cls, path: pathlib.Path) -> str:
-        try:
-            probe_result = _ffprobe(
-                "-hide_banner",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                "-show_chapters",
-                "-i",
-                path,
-            )
-            assert isinstance(probe_result, str)
-            return probe_result
-        except sh.ErrorReturnCode:
-            raise exceptions.ContainerCannotBeRead(path)
+    _deep_probe_track_results: typing.Optional[
+        dict[Track, list[ContainerFrameData]]
+    ] = None
 
-    _deep_probed_tracks: typing.Optional[set[int]] = None
-
-    def _deep_probe_frames(self, track_index: int):
-        # Quick sanity check
+    def _deep_probe_frames(self, track: Track):
+        # Quick sanity checking
         assert self._path is not None
+        assert track.container is self
 
-        # Initialize the instance variable if not already done
-        if self._deep_probed_tracks is None:
-            self._deep_probed_tracks = set()
+        # Initialize the instance dict if not already done
+        if self._deep_probe_track_results is None:
+            self._deep_probe_track_results = dict()
 
         # If the track has not already been deep probed, then proceed
-        if track_index not in self._deep_probed_tracks:
-            self._deep_probed_tracks.add(track_index)
+        if track not in self._deep_probe_track_results:
             try:
                 # Run the ffprobe and parse it into a (partial) Container object
-                results_json = _ffprobe(
+                results_raw = _ffprobe(
                     "-hide_banner",
                     "-v",
                     "quiet",
@@ -837,7 +792,7 @@ class Container(pydantic.BaseModel):
                     "json",
                     "-show_format",
                     "-select_streams",
-                    str(track_index),
+                    str(track.index),
                     "-show_frames",
                     "-read_intervals",
                     "%+#1",
@@ -846,39 +801,72 @@ class Container(pydantic.BaseModel):
                     "-i",
                     self._path,
                 )
-                assert isinstance(results_json, str)
-                results = Container.model_validate_json(results_json)
-
-                # Take the parsed frames and add them into the main list
-                self.frames.extend(results.frames)
+                assert isinstance(results_raw, str)
+                results_obj = json.loads(results_raw)
+                frames = pydantic.TypeAdapter(
+                    list[ContainerFrameData]
+                ).validate_python(results_obj.get("frames", []))
+                self._deep_probe_track_results[track] = frames
             except sh.ErrorReturnCode:
                 raise exceptions.ContainerCannotBeRead(self._path)
 
-    _path: typing.Optional[pathlib.Path] = None
+    @classmethod
+    def _probe_mediainfo(cls, path: pathlib.Path) -> str:
+        try:
+            result = _mediainfo(
+                "--Full",
+                "--Output=JSON",
+                path,
+            )
+            assert isinstance(result, str)
+            return result
+        except sh.ErrorReturnCode:
+            raise exceptions.ContainerCannotBeRead(path)
 
     @classmethod
     def open(cls, path: pathlib.Path) -> "Container":
-        """Open a media container by its path and return a new `Container` instance."""
-        raw_json = cls._probe(path)
+        """Open and parse a media container; returning a new `Container` instance."""
 
-        # Parse the JSON into a new instance
-        instance = Container.model_validate_json(raw_json)
-        instance._path = path
+        raw_str = cls._probe_mediainfo(path)
+        raw_json = json.loads(raw_str)
 
-        # Bind all the tracks back to this container
-        for track in instance.tracks:
-            track._bind(instance)
+        # Validate that the mediainfo version is at least the minimum required
+        parser_ver = packaging.version.parse(
+            raw_json.get("creatingLibrary", {}).get("version", "0.0")
+        )
+        if parser_ver < _mediainfo_min_ver:
+            raise exceptions.MediainfoLessThanMin()
 
-        # Because ffprobe co-mingles attachments with tracks, we have to tease
-        # them apart manually and then add them to the attachment list.
-        instance.attachments = []
-        for track in instance.tracks:
-            if track.type is TrackType.Attachment or track.flags.attached_pic:
-                track.type = TrackType.Attachment
-                instance.attachments.append(track)
-                instance.tracks.remove(track)
+        # Begin iterating through the tracks in the file
+        format_info: typing.Optional[Track] = None
+        track_list: list[Track] = []
+        for track_info in raw_json.get("media", {}).get("track", []):
+            track_type_str = track_info.get("@type", None)
+            if track_type_str is None or track_type_str == "Menu":
+                continue
 
-        return instance
+            # Separate out the general track
+            if track_type_str == "General":
+                format_info = Track._parse(track_info)
+                continue
+
+            track_list.append(Track._parse(track_info))
+
+        assert format_info is not None
+
+        # Create the new container instance
+        container = cls(
+            format=format_info,
+            tracks=track_list,
+        )
+        container._path = path
+
+        # Bind all tracks to the container
+        for track in container.tracks:
+            track._bind(container)
+
+        # Finally, return the container instance
+        return container
 
     @staticmethod
     def select_tracks_from_list(  # noqa: C901
@@ -1063,13 +1051,15 @@ class Container(pydantic.BaseModel):
         )
 
     def _assert_is_matroska(self):
-        if "matroska" not in self.format.format_name.lower():
+        if (
+            "matroska"
+            not in self.format._mediainfo_data.get("Format", "").lower()
+        ):
             raise exceptions.NotMatroskaContainer(self)
 
     def extract_tracks(
         self,
         track_pairs: list[tuple[Track, pathlib.Path]],
-        fg: bool = True,
         /,
         warnings_are_fatal=False,
     ):
@@ -1078,11 +1068,12 @@ class Container(pydantic.BaseModel):
 
         *ONLY WORKS WITH MKV CONTAINERS*
         """
+        assert self._path is not None
         self._assert_is_matroska()
 
         # Begin building a list of arguments for extraction
         extract_args: list[typing.Union[pathlib.Path, str]] = [
-            self.format.filename,
+            str(self._path),
             "tracks",
         ]
 
@@ -1119,7 +1110,7 @@ class Container(pydantic.BaseModel):
         tools.run_command_politely(
             _mkvextract,
             arguments=[
-                self.format.filename,
+                str(self._path),
                 "chapters",
                 "--redirect-output",
                 path,
@@ -1139,7 +1130,7 @@ class Container(pydantic.BaseModel):
 
         # Call mkvextract to begin the extraction
         result = _mkvextract(
-            self.format.filename,
+            str(self._path),
             "chapters",
             "--output-charset",
             "UTF-8",
@@ -1154,16 +1145,17 @@ class Container(pydantic.BaseModel):
         return track in self.tracks
 
     def get_frame_side_data(
-        self, track_index: int, data_type: SideDataType
+        self, track: Track, data_type: SideDataType
     ) -> typing.Generator[dict[str, typing.Any], None, None]:
         """For a given track index, yield all side data entries that match the given type."""
         # Before perusing the frames, make sure that the track in question has
         # been deep probed for frame side data
-        self._deep_probe_frames(track_index)
+        self._deep_probe_frames(track)
 
         # Identify any side data belonging to the track and yield it
-        for frame in self.frames:
-            if frame.track_index == track_index:
+        assert self._deep_probe_track_results is not None
+        for frame in self._deep_probe_track_results[track]:
+            if frame.track_index == track.index:
                 for side_data in frame.side_data_list:
                     if side_data.get("side_data_type", "") == data_type.value:
                         yield side_data
@@ -1171,41 +1163,10 @@ class Container(pydantic.BaseModel):
 
 _cli_app = typer.Typer()
 
-
-@_cli_app.command(
-    "probe",
-    help="Probe a single media file using the same ffprobe command used internally"
-    " by `spgill.media.info.Container.open()` and print the results.",
-)
-def _cli_probe(
-    path: typing.Annotated[
-        pathlib.Path, typer.Argument(help="Path to the media file.")
-    ],
-    deep_probe_indices: typing.Annotated[
-        typing.Optional[list[int]],
-        typer.Option(
-            "--deep",
-            "-d",
-            help="List of track indexes on which to perform a frame-level deep probe.",
-        ),
-    ] = None,
-):
-    # print(Container._probe(path))
-    print("PROBE OUTPUT:")
-    print(Container._probe(path))
-
-    if deep_probe_indices:
-        container = Container.open(path)
-        for i in deep_probe_indices:
-            container._deep_probe_frames(i)
-        print("\n\nPROBE FRAMES:")
-        print(container.frames)
-
-
 _default_cli_extensions: list[str] = [".mkv", ".mp4", ".m4v", ".wmv", ".avi"]
 
 _affirmative = "[green]✓[/green]"
-_negative = "[red]✗[/red]"
+_negative = "[red]X[/red]"
 _em_dash = "—"
 
 
@@ -1273,9 +1234,11 @@ def _cli_tracks(  # noqa: C901
     table.add_column("Type")
     table.add_column("Order")
     table.add_column("Codec")
+    table.add_column("Features")
     table.add_column("Size", justify="right")
     table.add_column("Bitrate", justify="right")
     table.add_column("Resolution")
+    table.add_column("Frame rate")
     table.add_column("HDR")
 
     if dovi_info:
@@ -1305,38 +1268,37 @@ def _cli_tracks(  # noqa: C901
             table.add_row(f"[red]{path}[/] (READ ERROR)", end_section=True)
             continue
 
-        track_list = container.select_tracks(selector)
+        # track_list = container.select_tracks(selector)
+        track_list = container.tracks
 
         # Add a row for each track
         for j, track in enumerate(track_list):
-            codec = track.codec_name or ""
+            codec = track.codec or ""
+            codec_features = []
 
             # Add suffix to the codec if the audio track has additional
             # information not visible in just the codec
             if track.is_atmos:
-                codec += "+atmos"
+                codec_features.append("Atmos")
             if track.is_dts_hd_ma:
-                codec += "+dts:hd"
+                codec_features.append("HD")
             if track.is_dts_x:
-                codec += "+dts:x"
+                codec_features.append("X")
 
             # If there's closed captioning embedded in the video, add a suffix
             if track.has_closed_captions:
-                codec += "+cc"
+                codec_features.append("CC")
 
             resolution = ""
+            frame_rate = ""
             if track.width:
                 resolution = f"{track.width}x{track.height}"
-                if track.field_order in ["tt", "bb", "tb", "bt"]:
+                if track.is_interlaced:
                     resolution += "i"
                 else:
                     resolution += "p"
 
-                if track.avg_frame_rate:
-                    try:
-                        resolution += str(round(eval(track.avg_frame_rate), 2))
-                    except ZeroDivisionError:
-                        pass
+                frame_rate = str(track.frame_rate or "")
 
             hdr = ""
             dovi_col = ""
@@ -1358,28 +1320,30 @@ def _cli_tracks(  # noqa: C901
                 rich.text.Text(str(path), style="yellow"),
                 str(track.index),
                 str(track.type.name if track.type else ""),
-                str(track.type_index),
+                str(track.type_order),
                 codec,
+                ",".join(codec_features) if codec_features else "",
                 str(
                     humanize.naturalsize(
-                        track.tags.number_of_bytes,
+                        track.size,
                         binary=True,
                         gnu=True,
                     )
-                    if track.tags.number_of_bytes
+                    if track.size
                     else _em_dash
                 ),
                 str(
                     humanize.naturalsize(
-                        track.tags.bps,
+                        track.bitrate,
                         binary=True,
                         gnu=True,
                     )
                     + "/s"
-                    if track.tags.bps
+                    if track.bitrate
                     else _em_dash
                 ),
                 resolution,
+                frame_rate,
                 hdr,
                 dovi_col if dovi_info else None,
                 str(track.channels or ""),
