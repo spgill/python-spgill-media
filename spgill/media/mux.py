@@ -389,9 +389,10 @@ class MuxJob:
         The methodology used here may apply to other text-based subtitle formats,
         but the scope of this method will be strictly limited to SRT files.
         """
-        assert container.format.format_name == "srt"
+        assert container.format.format == "SubRip"
+        assert container.path is not None
 
-        charset = tools.guess_subtitle_charset(container.format.filename)
+        charset = tools.guess_subtitle_charset(container.path)
 
         self.append_track(
             container.tracks[0],
@@ -750,7 +751,7 @@ class MuxJob:
         for option_type, option_value in options.items():
             yield from self._format_option(option_type, option_value)
 
-        yield str(container.format.filename)
+        yield str(container.path)
 
     def _generate_track_arguments(
         self, track: info.Track

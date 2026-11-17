@@ -872,7 +872,7 @@ class Container(pydantic.BaseModel):
     Do _NOT_ instantiate this class manually, use the `Container.open()` class method instead.
     """
 
-    _path: typing.Optional[pathlib.Path] = None
+    path: typing.Optional[pathlib.Path] = None
 
     format: Track
     chapters: list[ChapterList]
@@ -941,7 +941,7 @@ class Container(pydantic.BaseModel):
 
     def _deep_probe_frames(self, track: Track):
         # Quick sanity checking
-        assert self._path is not None
+        assert self.path is not None
         assert track.container is self
 
         # Initialize the instance dict if not already done
@@ -967,7 +967,7 @@ class Container(pydantic.BaseModel):
                     "-show_entries",
                     "frame=stream_index,side_data_list",
                     "-i",
-                    self._path,
+                    self.path,
                 )
                 assert isinstance(results_raw, str)
                 results_obj = json.loads(results_raw)
@@ -976,7 +976,7 @@ class Container(pydantic.BaseModel):
                 ).validate_python(results_obj.get("frames", []))
                 self._deep_probe_track_results[track] = frames
             except sh.ErrorReturnCode:
-                raise exceptions.ContainerCannotBeRead(self._path)
+                raise exceptions.ContainerCannotBeRead(self.path)
 
     @classmethod
     def _probe_mediainfo(cls, path: pathlib.Path) -> str:
@@ -1040,7 +1040,7 @@ class Container(pydantic.BaseModel):
             chapters=chapters,
             tracks=track_list,
         )
-        container._path = path
+        container.path = path
 
         # Bind all tracks to the container
         for track in container.tracks:
@@ -1249,12 +1249,12 @@ class Container(pydantic.BaseModel):
 
         *ONLY WORKS WITH MKV CONTAINERS*
         """
-        assert self._path is not None
+        assert self.path is not None
         self._assert_is_matroska()
 
         # Begin building a list of arguments for extraction
         extract_args: list[typing.Union[pathlib.Path, str]] = [
-            str(self._path),
+            str(self.path),
             "tracks",
         ]
 
@@ -1291,7 +1291,7 @@ class Container(pydantic.BaseModel):
         tools.run_command_politely(
             _mkvextract,
             arguments=[
-                str(self._path),
+                str(self.path),
                 "chapters",
                 "--redirect-output",
                 path,
@@ -1311,7 +1311,7 @@ class Container(pydantic.BaseModel):
 
         # Call mkvextract to begin the extraction
         result = _mkvextract(
-            str(self._path),
+            str(self.path),
             "chapters",
             "--output-charset",
             "UTF-8",

@@ -141,7 +141,7 @@ class EditJob:
         self._container = container
 
         # Sanity check that this is an MKV container. No other formats may be edited.
-        assert "matroska" in container.format.format_name.lower()
+        container._assert_is_matroska()
 
         # Initialize instance vars
         self._tag_actions = []
@@ -309,7 +309,7 @@ class EditJob:
 
     def _generate_command_arguments(self) -> typing.Generator[str, None, None]:
         # Start with the filename
-        yield str(self._container.format.filename)
+        yield str(self._container.path)
 
         yield from self._generate_tag_arguments()
         yield from self._generate_chapter_arguments()
