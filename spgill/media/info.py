@@ -435,7 +435,7 @@ class Track(pydantic.BaseModel):
             unique_id=_parse_int(track_data, "UniqueID"),
             type=TrackType(track_data.get("@type", None)),
             type_order=_parse_int(track_data, "@typeorder", 1) - 1,
-            index=int(track_data.get("ID", 0)) - 1,
+            index=int(track_data.get("ID", 1)) - 1,
             format=_parse_str_optional(track_data, "Format"),
             format_commercial=_parse_str_optional(
                 track_data, "Format_Commercial"
